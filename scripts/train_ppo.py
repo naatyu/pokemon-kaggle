@@ -19,6 +19,7 @@ from rl.ptcg_env import PTCGEnv
 from rl.opponents import make_opponent
 from rl.ptcg_env import NOOP_ACTION
 from rl.device import resolve_torch_device
+from rl.action_policy import ActionMaskablePolicy
 from cg.api import to_observation_class
 
 
@@ -53,9 +54,14 @@ def build_env(
 
 
 def build_model(args: argparse.Namespace, env: PTCGEnv | VecEnv) -> MaskablePPO:
-    policy_kwargs = {"net_arch": args.net_arch}
+    policy = ActionMaskablePolicy if args.policy == "action" else "MlpPolicy"
+    policy_kwargs = (
+        {"hidden_dim": args.policy_hidden_dim}
+        if args.policy == "action"
+        else {"net_arch": args.net_arch}
+    )
     model = MaskablePPO(
-        "MlpPolicy",
+        policy,
         env,
         verbose=1,
         seed=args.seed,
@@ -274,6 +280,8 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--ent-coef", type=float, default=0.02)
+    parser.add_argument("--policy", choices=["mlp", "action"], default="mlp")
+    parser.add_argument("--policy-hidden-dim", type=int, default=256)
     parser.add_argument("--net-arch", type=parse_net_arch, default=[64, 64])
     parser.add_argument("--reward-shaping-scale", type=float, default=1.0)
     parser.add_argument("--bc-teacher")

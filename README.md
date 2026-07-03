@@ -103,14 +103,15 @@ uv run python scripts/train_ppo.py \
   --deck metal_archaludon \
   --opponent "$POOL" \
   --timesteps 100000 \
-  --load-path models/ppo_combo_bc_public_metal_30k.zip \
-  --save-path models/ppo_combo_broad_100k \
+  --load-path models/ppo_action_bc_public_metal_30k.zip \
+  --save-path models/ppo_action_broad_100k \
   --n-envs 16 \
   --n-steps 128 \
   --batch-size 512 \
   --learning-rate 0.00001 \
   --ent-coef 0.02 \
-  --net-arch 256,256 \
+  --policy action \
+  --policy-hidden-dim 256 \
   --reward-shaping-scale 0 \
   --bc-teacher public_metal_archaludon \
   --bc-samples 12000 \
@@ -118,7 +119,7 @@ uv run python scripts/train_ppo.py \
   --eval-opponent "$POOL" \
   --eval-games 60 \
   --eval-freq 1024 \
-  --best-save-path models/best/ppo_combo_broad_best \
+  --best-save-path models/best/ppo_action_broad_best \
   --device cuda
 ```
 
@@ -127,6 +128,11 @@ prints `torch_device=...` at startup. Keep `--n-envs` high for speed: the neural
 network updates run on GPU, but game simulation and legal-action generation are
 still CPU work. In-training evaluation must use subprocess envs; do not combine
 `--eval-opponent` with `--start-method dummy` or a single env.
+
+`--policy action` is the recommended policy for new checkpoints. It scores each
+ranked action choice with shared action-slot weights, using the global board
+features plus the per-action features. It is slower than the flat MLP policy but
+has produced the strongest local and public-opponent baseline so far.
 
 Evaluate a checkpoint:
 

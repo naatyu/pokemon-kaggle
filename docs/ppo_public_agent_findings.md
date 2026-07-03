@@ -14,35 +14,38 @@ Historical note: `models/best/ppo_rich_broad_best.zip` was the best checkpoint
 before combo action choices. It should be treated as a historical result because
 the action mapping changed for multi-select states.
 
-`models/best/ppo_combo_broad_best.zip` is the best checkpoint trained with the
-current combo-action environment. It starts from `models/ppo_combo_bc_public_metal_30k.zip`
+`models/best/ppo_action_broad_best.zip` is the best current checkpoint. It uses
+the combo-action environment plus the action-aware policy from
+`rl/action_policy.py`. It starts from `models/ppo_action_bc_public_metal_30k.zip`
 and fine-tunes with:
 
 - `--reward-shaping-scale 0`
 - low learning rate: `1e-5`
 - BC regularization from `public_metal_archaludon`
+- `--policy action`
 - mixed public/local opponent pool
 - in-training masked evaluation and best-checkpoint saving
 
-Mixed eval during training improved from `15/60` at step 0 to `21/60` at
-65k timesteps. The per-opponent 40-game sweep:
+Mixed eval during training improved from `23/60` at step 0 to `27/60` at
+49k timesteps. The per-opponent 40-game sweep:
 
 ```text
-public_metal_archaludon: 3/40
+public_metal_archaludon: 2/40
 public_multiply_940: 4/40
-public_mega_lucario_v62: 1/40
+public_mega_lucario_v62: 9/40
 public_crustle_v1: 4/40
-public_phantom_dragapult: 4/40
-public_froslass_sleep: 7/40
-public_kangaskhan_pressure: 17/40
-heuristic_hydrapple: 23/40
-heuristic_dragapult: 29/40
-random_abomasnow: 23/40
+public_phantom_dragapult: 7/40
+public_froslass_sleep: 17/40
+public_kangaskhan_pressure: 21/40
+heuristic_hydrapple: 29/40
+heuristic_dragapult: 36/40
+random_abomasnow: 34/40
 ```
 
-This checkpoint beats both local heuristic agents, which the previous broad
-checkpoint did not. It also improves `public_multiply_940`, but it is still far
-from beating the strongest public agents.
+This checkpoint beats both local heuristic agents decisively and improves
+several public matchups, especially `public_mega_lucario_v62`,
+`public_phantom_dragapult`, and `public_froslass_sleep`. It is still far from
+beating `public_metal_archaludon`.
 
 `models/best/ppo_combo_metal_focused_best.zip` was selected specifically
 against `public_metal_archaludon`. Its in-training best was `4/40`, but an
@@ -225,6 +228,43 @@ The 20-game smoke for this same checkpoint showed `5/20` against
 `public_metal_archaludon`, but the 40-game sweep dropped to `0/40`, so the
 strong-public results remain noisy at small sample sizes.
 
+## Action-Aware Policy
+
+The default `MlpPolicy` receives the whole flattened observation and emits one
+logit per action slot. This is a poor inductive bias because action slot 0 and
+action slot 50 use unrelated output weights even though they are both legal
+action choices described by the same per-action feature schema.
+
+`ActionMaskablePolicy` scores each action choice with shared weights:
+
+- encode global board features once
+- encode each action slot's feature vector with the same option encoder
+- score each action from `[global_embedding, option_embedding]`
+- score the no-op action from the global embedding
+- use a separate global critic
+
+`models/ppo_action_bc_public_metal_30k.zip` trained with this policy reached
+BC top-1 accuracy `0.545`, compared with `0.504` for the combo MLP BC run.
+
+Its 40-game sweep before PPO:
+
+```text
+public_metal_archaludon: 0/40
+public_multiply_940: 4/40
+public_mega_lucario_v62: 6/40
+public_crustle_v1: 2/40
+public_phantom_dragapult: 5/40
+public_froslass_sleep: 15/40
+public_kangaskhan_pressure: 24/40
+heuristic_hydrapple: 30/40
+heuristic_dragapult: 32/40
+random_abomasnow: 34/40
+```
+
+PPO fine-tuning from this checkpoint produced the current best mixed result
+(`27/60`) and improved some public matchups further, but still did not solve
+public Metal.
+
 ## Diagnosis
 
 The analyzer shows PPO still chooses heuristic rank 0 most of the time,
@@ -249,12 +289,13 @@ useful corrective signal.
 More raw PPO timesteps are unlikely to be enough by themselves. The current
 highest-value changes are:
 
-1. A policy architecture that scores each legal option with shared action
-   features instead of flattening 256 ranked options into one MLP input.
-2. Stronger BC before PPO: larger datasets, validation accuracy, and possibly
+1. Stronger BC before PPO: larger datasets, validation accuracy, and possibly
    sequence-level imitation for multi-select states.
-3. Per-opponent curriculum with best-checkpoint selection, not final-checkpoint
+2. Per-opponent curriculum with best-checkpoint selection, not final-checkpoint
    selection.
-4. A better reward for hard public matchups. Focused public-Metal PPO improved
+3. A better reward for hard public matchups. Focused public-Metal PPO improved
    rollout reward from about `-0.29` toward `-0.04`, while held-out wins fell as
    low as `0/40`; reward and actual win probability are still misaligned.
+4. A public-Metal-specific teacher or value target. The current public-Metal
+   teacher helps general play, but imitation still does not reproduce the
+   teacher's own public-Metal matchup strength.

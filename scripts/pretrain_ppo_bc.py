@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from rl.opponents import make_opponent  # noqa: E402
 from rl.device import resolve_torch_device  # noqa: E402
 from rl.ptcg_env import NOOP_ACTION, PTCGEnv  # noqa: E402
+from rl.action_policy import ActionMaskablePolicy  # noqa: E402
 from scripts.train_ppo import parse_net_arch  # noqa: E402
 from cg.api import to_observation_class  # noqa: E402
 
@@ -32,6 +33,8 @@ def main() -> None:
     parser.add_argument("--load-path", type=Path)
     parser.add_argument("--seed", type=int, default=31)
     parser.add_argument("--device", default="auto", help="Torch device: auto, cpu, cuda, or cuda:N.")
+    parser.add_argument("--policy", choices=["mlp", "action"], default="mlp")
+    parser.add_argument("--policy-hidden-dim", type=int, default=256)
     parser.add_argument("--net-arch", type=parse_net_arch, default=[256, 256])
     args = parser.parse_args()
     args.device = resolve_torch_device(args.device)
@@ -49,8 +52,14 @@ def main() -> None:
 
 
 def _build_model(args: argparse.Namespace, env: PTCGEnv) -> MaskablePPO:
+    policy = ActionMaskablePolicy if args.policy == "action" else "MlpPolicy"
+    policy_kwargs = (
+        {"hidden_dim": args.policy_hidden_dim}
+        if args.policy == "action"
+        else {"net_arch": args.net_arch}
+    )
     model = MaskablePPO(
-        "MlpPolicy",
+        policy,
         env,
         verbose=1,
         seed=args.seed,
@@ -59,7 +68,7 @@ def _build_model(args: argparse.Namespace, env: PTCGEnv) -> MaskablePPO:
         gamma=0.99,
         learning_rate=args.learning_rate,
         ent_coef=0.02,
-        policy_kwargs={"net_arch": args.net_arch},
+        policy_kwargs=policy_kwargs,
         device=args.device,
     )
     if args.load_path:
