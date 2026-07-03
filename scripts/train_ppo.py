@@ -216,10 +216,18 @@ def teacher_action_to_rank(env: PTCGEnv, teacher) -> int | None:
         return None
     if not selected:
         return NOOP_ACTION if mask[NOOP_ACTION] else None
-    ranked = env._ranked_option_indices(to_observation_class(env.obs_dict))
+    choices = env._ranked_action_choices(to_observation_class(env.obs_dict))
+    selected_tuple = tuple(selected)
     try:
-        return ranked.index(selected[0])
+        return choices.index(selected_tuple)
     except ValueError:
+        selected_set = set(selected)
+        for index, choice in enumerate(choices):
+            if set(choice) == selected_set:
+                return index
+        for index, choice in enumerate(choices):
+            if choice and choice[0] == selected[0]:
+                return index
         return None
 
 

@@ -10,8 +10,13 @@ best sweep uses 40 deterministic games per opponent.
 
 ## Current Best PPO Checkpoint
 
-`models/best/ppo_rich_broad_best.zip` is the best current PPO-family checkpoint.
-It starts from rich-observation BC, fine-tunes with:
+Historical note: `models/best/ppo_rich_broad_best.zip` was the best checkpoint
+before combo action choices. It should be treated as a historical result because
+the action mapping changed for multi-select states.
+
+`models/best/ppo_combo_broad_best.zip` is the best checkpoint trained with the
+current combo-action environment. It starts from `models/ppo_combo_bc_public_metal_30k.zip`
+and fine-tunes with:
 
 - `--reward-shaping-scale 0`
 - low learning rate: `1e-5`
@@ -19,26 +24,29 @@ It starts from rich-observation BC, fine-tunes with:
 - mixed public/local opponent pool
 - in-training masked evaluation and best-checkpoint saving
 
-Mixed eval during training improved from `18/60` at step 0 to `22/60` at
-98k timesteps. The per-opponent 40-game sweep:
+Mixed eval during training improved from `15/60` at step 0 to `21/60` at
+65k timesteps. The per-opponent 40-game sweep:
 
 ```text
-public_metal_archaludon: 4/40
-public_multiply_940: 1/40
-public_mega_lucario_v62: 3/40
-public_crustle_v1: 5/40
-public_phantom_dragapult: 2/40
+public_metal_archaludon: 3/40
+public_multiply_940: 4/40
+public_mega_lucario_v62: 1/40
+public_crustle_v1: 4/40
+public_phantom_dragapult: 4/40
 public_froslass_sleep: 7/40
-public_kangaskhan_pressure: 21/40
-heuristic_hydrapple: 17/40
+public_kangaskhan_pressure: 17/40
+heuristic_hydrapple: 23/40
 heuristic_dragapult: 29/40
-random_abomasnow: 35/40
+random_abomasnow: 23/40
 ```
 
-This is the first checkpoint with nonzero 40-game results against all three
-strongest public agents, and it clearly beats `random_abomasnow` and
-`heuristic_dragapult`. It still does not reliably beat `heuristic_hydrapple` or
-the strongest public agents.
+This checkpoint beats both local heuristic agents, which the previous broad
+checkpoint did not. It also improves `public_multiply_940`, but it is still far
+from beating the strongest public agents.
+
+`models/best/ppo_combo_metal_focused_best.zip` was selected specifically
+against `public_metal_archaludon`. Its in-training best was `4/40`, but an
+external 40-game check produced `2/40`, so it is not a better general checkpoint.
 
 ## Hydrapple PPO
 
@@ -179,6 +187,44 @@ supports masked in-training evaluation and `--best-save-path`, including an
 initial step-0 evaluation, so fine-tuning can preserve the loaded BC policy when
 PPO regresses.
 
+## Combo Action Mapping
+
+The original ranked action mapping represented a multi-select state by choosing
+one option, then filling the rest greedily from the heuristic. This lost teacher
+signal for decisions such as "choose 2" or "choose up to 3".
+
+The environment now builds ranked action choices. For single-select states this
+is still one option per action. For multi-select states, actions can represent
+high-scoring option combinations. `scripts/analyze_action_mapping.py` measures
+teacher coverage.
+
+On 5k public-Metal teacher samples from the mixed opponent pool:
+
+```text
+old mapping exact full-list coverage: 0.904
+combo mapping exact full-list coverage: 0.976
+combo mapping set-equivalent coverage: 1.000
+```
+
+`models/ppo_combo_bc_public_metal_30k.zip`, trained after this change:
+
+```text
+public_metal_archaludon: 0/40
+public_multiply_940: 2/40
+public_mega_lucario_v62: 6/40
+public_crustle_v1: 5/40
+public_phantom_dragapult: 3/40
+public_froslass_sleep: 5/40
+public_kangaskhan_pressure: 24/40
+heuristic_hydrapple: 15/40
+heuristic_dragapult: 24/40
+random_abomasnow: 21/40
+```
+
+The 20-game smoke for this same checkpoint showed `5/20` against
+`public_metal_archaludon`, but the 40-game sweep dropped to `0/40`, so the
+strong-public results remain noisy at small sample sizes.
+
 ## Diagnosis
 
 The analyzer shows PPO still chooses heuristic rank 0 most of the time,
@@ -203,11 +249,12 @@ useful corrective signal.
 More raw PPO timesteps are unlikely to be enough by themselves. The current
 highest-value changes are:
 
-1. Better action representation: handle multi-select choices directly instead
-   of reducing teacher choices to the first selected ranked option.
-2. A policy architecture that scores each legal option with shared action
+1. A policy architecture that scores each legal option with shared action
    features instead of flattening 256 ranked options into one MLP input.
-3. Stronger BC before PPO: larger datasets, validation accuracy, and possibly
+2. Stronger BC before PPO: larger datasets, validation accuracy, and possibly
    sequence-level imitation for multi-select states.
-4. Per-opponent curriculum with best-checkpoint selection, not final-checkpoint
+3. Per-opponent curriculum with best-checkpoint selection, not final-checkpoint
    selection.
+4. A better reward for hard public matchups. Focused public-Metal PPO improved
+   rollout reward from about `-0.29` toward `-0.04`, while held-out wins fell as
+   low as `0/40`; reward and actual win probability are still misaligned.

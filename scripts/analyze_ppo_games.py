@@ -99,10 +99,10 @@ def _chosen_option_type(env: PTCGEnv, action: int) -> str:
     obs = to_observation_class(env.obs_dict)
     if obs.select is None:
         return "NO_SELECT"
-    ranked = env._ranked_option_indices(obs)
-    if action < 0 or action >= len(ranked):
+    choices = env._ranked_action_choices(obs)
+    if action < 0 or action >= len(choices) or not choices[action]:
         return "OUT_OF_RANGE"
-    option_type = obs.select.option[ranked[action]].type
+    option_type = obs.select.option[choices[action][0]].type
     return getattr(option_type, "name", str(option_type))
 
 

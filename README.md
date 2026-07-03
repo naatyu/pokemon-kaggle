@@ -103,8 +103,8 @@ uv run python scripts/train_ppo.py \
   --deck metal_archaludon \
   --opponent "$POOL" \
   --timesteps 100000 \
-  --load-path models/ppo_rich_bc_public_metal_30k.zip \
-  --save-path models/ppo_rich_broad_100k \
+  --load-path models/ppo_combo_bc_public_metal_30k.zip \
+  --save-path models/ppo_combo_broad_100k \
   --n-envs 16 \
   --n-steps 128 \
   --batch-size 512 \
@@ -118,7 +118,7 @@ uv run python scripts/train_ppo.py \
   --eval-opponent "$POOL" \
   --eval-games 60 \
   --eval-freq 1024 \
-  --best-save-path models/best/ppo_rich_broad_best \
+  --best-save-path models/best/ppo_combo_broad_best \
   --device cuda
 ```
 

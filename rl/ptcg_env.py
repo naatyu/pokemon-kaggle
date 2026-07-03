@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import sys
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,8 @@ POKEMON_FEATURES = 10
 GLOBAL_FEATURES = BASE_FEATURES + 2 * BOARD_SLOTS_PER_PLAYER * POKEMON_FEATURES
 OPTION_FEATURES = 16
 OBS_SIZE = GLOBAL_FEATURES + MAX_OPTIONS * OPTION_FEATURES
+MAX_COMBO_OPTIONS = 18
+MAX_COMBO_CANDIDATES = 2048
 
 
 class PTCGEnv(gym.Env):
@@ -70,9 +73,16 @@ class PTCGEnv(gym.Env):
         if seed is not None:
             self.rng.seed(seed)
         self._finish_if_needed()
-        self.opponent_name = self.rng.choice(self.opponent_names)
-        self.opponent = make_opponent(self.opponent_name)
-        obs, start_data = battle_start(self.deck, self.opponent.deck())
+        opponent_deck = None
+        for _ in range(max(3, len(self.opponent_names) * 2)):
+            self.opponent_name = self.rng.choice(self.opponent_names)
+            self.opponent = make_opponent(self.opponent_name)
+            opponent_deck = self.opponent.deck()
+            if len(opponent_deck) == 60:
+                break
+        if opponent_deck is None or len(opponent_deck) != 60:
+            raise RuntimeError(f"Opponent {self.opponent_name} returned {len(opponent_deck or [])} deck cards.")
+        obs, start_data = battle_start(self.deck, opponent_deck)
         if obs is None:
             raise RuntimeError(f"battle_start failed: player={start_data.errorPlayer} type={start_data.errorType}")
         self.battle_active = True
@@ -141,9 +151,9 @@ class PTCGEnv(gym.Env):
         if obs.select is None or obs.current is None or obs.current.yourIndex != 0:
             mask[NOOP_ACTION] = True
             return mask
-        option_count = min(len(obs.select.option), MAX_OPTIONS)
-        if option_count > 0:
-            mask[:option_count] = True
+        choice_count = len(self._ranked_action_choices(obs))
+        if choice_count > 0:
+            mask[:choice_count] = True
         if obs.select.minCount == 0:
             mask[NOOP_ACTION] = True
         if not mask.any():
@@ -172,35 +182,26 @@ class PTCGEnv(gym.Env):
         select = obs.select
         if select is None or select.maxCount == 0 or len(select.option) == 0:
             return []
-        ranked_options = self._ranked_option_indices(obs)
-        option_count = len(ranked_options)
         if action == NOOP_ACTION and select.minCount == 0:
             return []
+        choices = self._ranked_action_choices(obs)
+        choice_count = len(choices)
         picked = int(action)
-        if picked < 0 or picked >= option_count:
-            picked = self.rng.randrange(option_count)
-        picked_option = ranked_options[picked]
-        if select.minCount <= 1 and select.maxCount == 1:
-            return [picked_option]
-        if select.minCount == 0:
-            return [picked_option]
-
-        selected = [picked_option]
-        for index in ranked_options:
-            if len(selected) >= select.minCount:
-                break
-            if index != picked_option:
-                selected.append(index)
-        return selected[: select.maxCount]
+        if picked < 0 or picked >= choice_count:
+            picked = self.rng.randrange(choice_count)
+        return list(choices[picked])
 
     def _action_shaping(self, action: int) -> float:
         if action == NOOP_ACTION or self.obs_dict is None:
             return 0.0
         obs = to_observation_class(self.obs_dict)
-        ranked_options = self._ranked_option_indices(obs)
-        if obs.select is None or action >= len(ranked_options):
+        choices = self._ranked_action_choices(obs)
+        if obs.select is None or action >= len(choices):
             return 0.0
-        option = obs.select.option[ranked_options[action]]
+        choice = choices[action]
+        if not choice:
+            return 0.0
+        option = obs.select.option[choice[0]]
         reward = 0.0
         if 0 <= action < 5:
             reward += (5 - action) * 0.001
@@ -316,11 +317,13 @@ class PTCGEnv(gym.Env):
                 offset += POKEMON_FEATURES
 
         if select is not None:
-            for index, option_index in enumerate(self._ranked_option_indices(obs)):
-                option = select.option[option_index]
+            for index, choice in enumerate(self._ranked_action_choices(obs)):
+                if not choice:
+                    continue
+                option = select.option[choice[0]]
                 offset = GLOBAL_FEATURES + index * OPTION_FEATURES
                 card_id = _option_card_id(obs, option)
-                heuristic_score = _safe_score_option(obs, option, self.profile)
+                heuristic_score = _choice_score(obs, choice, self.profile)
                 card = load_card_db().get(card_id) if card_id is not None else None
                 features[offset : offset + OPTION_FEATURES] = [
                     option.type / 20.0,
@@ -331,7 +334,7 @@ class PTCGEnv(gym.Env):
                     (option.inPlayArea or 0) / 16.0,
                     (option.inPlayIndex or 0) / 8.0,
                     (option.attackId or 0) / 2000.0,
-                    (option.number or 0) / 10.0,
+                    len(choice) / 6.0,
                     np.clip(heuristic_score / 3000.0, -1.0, 1.0),
                     _card_hp(card),
                     _card_attack_damage(card),
@@ -353,6 +356,38 @@ class PTCGEnv(gym.Env):
             scored.append((score, index))
         scored.sort(key=lambda item: (-item[0], item[1]))
         return [index for _, index in scored]
+
+    def _ranked_action_choices(self, obs) -> list[tuple[int, ...]]:
+        select = obs.select
+        if select is None or select.maxCount == 0:
+            return []
+        ranked_options = self._ranked_option_indices(obs)
+        if not ranked_options:
+            return []
+        min_count = max(1, select.minCount)
+        max_count = max(min(select.maxCount, 6), min_count)
+        if min_count == 1 and max_count == 1:
+            return [(index,) for index in ranked_options[:MAX_OPTIONS]]
+
+        candidates: set[tuple[int, ...]] = set()
+        combo_options = ranked_options[: min(len(ranked_options), MAX_COMBO_OPTIONS)]
+        for count in range(min_count, max_count + 1):
+            if count == 1:
+                candidates.update((index,) for index in ranked_options)
+                continue
+            for combo in combinations(combo_options, count):
+                candidates.add(combo)
+                if len(candidates) >= MAX_COMBO_CANDIDATES:
+                    break
+            if len(candidates) >= MAX_COMBO_CANDIDATES:
+                break
+
+        scored = [
+            (_choice_score(obs, choice, self.profile), len(choice), tuple(ranked_options.index(index) for index in choice), choice)
+            for choice in candidates
+        ]
+        scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+        return [choice for _, _, _, choice in scored[:MAX_OPTIONS]]
 
     def _finish_if_needed(self) -> None:
         if not self.battle_active:
@@ -442,6 +477,16 @@ def _safe_score_option(obs, option, profile) -> int:
         return score_option(obs, option, profile)
     except Exception:
         return 0
+
+
+def _choice_score(obs, choice: tuple[int, ...], profile) -> int:
+    score = 0
+    for option_index in choice:
+        try:
+            score += score_option(obs, obs.select.option[option_index], profile)
+        except Exception:
+            pass
+    return score
 
 
 def _parse_opponent_names(opponent: str) -> list[str]:
