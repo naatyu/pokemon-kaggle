@@ -2,6 +2,11 @@
 __pycache__/
 *.py[oc]
 build/
+logs/
+arena/agents/
+arena/results/
+arena/public_sources/
+models/
 dist/
 wheels/
 *.egg-info
@@ -11,3 +16,4 @@ wheels/
 
 # Ignore challenge files
 pokemon-tcg-ai-battle
+/cg
