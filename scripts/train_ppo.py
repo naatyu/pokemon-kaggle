@@ -15,6 +15,13 @@ if str(PROJECT_ROOT) not in sys.path:
 from rl.ptcg_env import PTCGEnv
 
 
+def parse_net_arch(value: str) -> list[int]:
+    layers = [int(item.strip()) for item in value.split(",") if item.strip()]
+    if not layers:
+        raise argparse.ArgumentTypeError("--net-arch must contain at least one layer size.")
+    return layers
+
+
 def make_env(deck: str, opponent: str, seed: int, rank: int):
     def _init():
         return Monitor(PTCGEnv(deck=deck, opponent=opponent, seed=seed + rank))
@@ -32,6 +39,7 @@ def build_env(deck: str, opponent: str, seed: int, n_envs: int, start_method: st
 
 
 def build_model(args: argparse.Namespace, env: PTCGEnv | VecEnv) -> MaskablePPO:
+    policy_kwargs = {"net_arch": args.net_arch}
     model = MaskablePPO(
         "MlpPolicy",
         env,
@@ -42,6 +50,7 @@ def build_model(args: argparse.Namespace, env: PTCGEnv | VecEnv) -> MaskablePPO:
         gamma=0.99,
         learning_rate=args.learning_rate,
         ent_coef=args.ent_coef,
+        policy_kwargs=policy_kwargs,
         device=args.device,
     )
     if args.load_path:
@@ -69,6 +78,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--ent-coef", type=float, default=0.02)
+    parser.add_argument("--net-arch", type=parse_net_arch, default=[64, 64])
     args = parser.parse_args()
 
     env = build_env(args.deck, args.opponent, args.seed, args.n_envs, args.start_method)

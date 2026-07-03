@@ -69,8 +69,26 @@ ABOMASNOW_SAMPLE = DeckProfile(
 )
 
 
+METAL_ARCHALUDON = DeckProfile(
+    name="metal_archaludon",
+    deck_path="decks/metal_archaludon_public.csv",
+    main_attackers={190, 666},
+    backup_attackers={57},
+    setup_basics={169, 666, 57},
+    evolution_targets={190},
+    draw_search_cards={1121, 1122, 1147, 1152, 1185, 1227},
+    disruption_cards={1182, 1213},
+    recovery_cards={1097},
+    switch_cards=set(),
+    stadium_cards={1244},
+    energy_targets={190, 666},
+    expendable_cards=set(),
+)
+
+
 PROFILES = {
     HYDRAPPLE.name: HYDRAPPLE,
     DRAGAPULT.name: DRAGAPULT,
     ABOMASNOW_SAMPLE.name: ABOMASNOW_SAMPLE,
+    METAL_ARCHALUDON.name: METAL_ARCHALUDON,
 }

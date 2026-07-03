@@ -137,3 +137,7 @@ models/ppo_mixed_fixed_100k.zip vs heuristic_hydrapple: 21/50 wins
 Use `--opponent a,b,c` to sample opponents per episode. The simulator is
 process-global inside one Python process, so speed comes from `SubprocVecEnv`
 with separate simulator processes rather than from GPU alone.
+
+See [docs/ppo_public_agent_findings.md](docs/ppo_public_agent_findings.md) for
+public-agent experiments, behavioral cloning results, and the current diagnosis
+for why the strongest public agents still beat PPO.

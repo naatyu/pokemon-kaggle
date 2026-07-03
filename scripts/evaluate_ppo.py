@@ -22,6 +22,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--csv", action="store_true")
     args = parser.parse_args()
 
     model = MaskablePPO.load(args.model, device=args.device)
@@ -46,12 +48,19 @@ def main() -> None:
         else:
             draws += 1
         env.close()
-        print(f"game={game + 1} reward={total_reward:.3f} terminal={terminal_reward:.1f}")
-    print(
-        f"summary model={args.model} opponent={args.opponent} "
-        f"games={args.games} wins={wins} losses={losses} draws={draws} truncated={truncated} "
-        f"win_rate={wins / args.games:.3f}"
-    )
+        if not args.quiet:
+            print(f"game={game + 1} reward={total_reward:.3f} terminal={terminal_reward:.1f}")
+    if args.csv:
+        print(
+            "model,opponent,games,wins,losses,draws,truncated,win_rate\n"
+            f"{args.model},{args.opponent},{args.games},{wins},{losses},{draws},{truncated},{wins / args.games:.3f}"
+        )
+    else:
+        print(
+            f"summary model={args.model} opponent={args.opponent} "
+            f"games={args.games} wins={wins} losses={losses} draws={draws} truncated={truncated} "
+            f"win_rate={wins / args.games:.3f}"
+        )
 
 
 if __name__ == "__main__":
