@@ -10,6 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+from rl.device import resolve_torch_device
 from rl.ptcg_env import PTCGEnv
 
 
@@ -21,10 +22,11 @@ def main() -> None:
     parser.add_argument("--games", type=int, default=50)
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--deterministic", action="store_true")
-    parser.add_argument("--device", default="auto")
+    parser.add_argument("--device", default="auto", help="Torch device: auto, cpu, cuda, or cuda:N.")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--csv", action="store_true")
     args = parser.parse_args()
+    args.device = resolve_torch_device(args.device)
 
     model = MaskablePPO.load(args.model, device=args.device)
     wins = losses = draws = truncated = 0

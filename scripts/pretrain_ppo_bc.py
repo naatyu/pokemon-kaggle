@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from rl.opponents import make_opponent  # noqa: E402
+from rl.device import resolve_torch_device  # noqa: E402
 from rl.ptcg_env import NOOP_ACTION, PTCGEnv  # noqa: E402
 from scripts.train_ppo import parse_net_arch  # noqa: E402
 from cg.api import to_observation_class  # noqa: E402
@@ -30,9 +31,11 @@ def main() -> None:
     parser.add_argument("--save-path", type=Path, default=PROJECT_ROOT / "models" / "ppo_bc_public_metal")
     parser.add_argument("--load-path", type=Path)
     parser.add_argument("--seed", type=int, default=31)
-    parser.add_argument("--device", default="auto")
+    parser.add_argument("--device", default="auto", help="Torch device: auto, cpu, cuda, or cuda:N.")
     parser.add_argument("--net-arch", type=parse_net_arch, default=[256, 256])
     args = parser.parse_args()
+    args.device = resolve_torch_device(args.device)
+    print(f"torch_device={args.device}")
 
     env = PTCGEnv(deck=args.deck, opponent=args.opponent, seed=args.seed)
     teacher = make_opponent(args.teacher)

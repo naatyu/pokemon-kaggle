@@ -95,21 +95,38 @@ The PPO environment lives in `rl/ptcg_env.py`. It uses legal action masks and
 orders legal options by the current heuristic score, so action ranks are more
 stable than raw simulator option indexes.
 
-Fast mixed-opponent training:
+Fast mixed-opponent training with best-checkpoint selection:
 
 ```bash
+POOL='public_metal_archaludon,public_multiply_940,public_mega_lucario_v62,public_crustle_v1,public_phantom_dragapult,public_froslass_sleep,public_kangaskhan_pressure,heuristic_hydrapple,heuristic_dragapult,random_abomasnow'
 uv run python scripts/train_ppo.py \
-  --opponent random_abomasnow,heuristic_hydrapple \
+  --deck metal_archaludon \
+  --opponent "$POOL" \
   --timesteps 100000 \
-  --load-path models/ppo_ranked_random20k.zip \
-  --save-path models/ppo_mixed_fixed_100k \
+  --load-path models/ppo_rich_bc_public_metal_30k.zip \
+  --save-path models/ppo_rich_broad_100k \
   --n-envs 16 \
   --n-steps 128 \
   --batch-size 512 \
-  --learning-rate 0.0001 \
-  --ent-coef 0.01 \
+  --learning-rate 0.00001 \
+  --ent-coef 0.02 \
+  --net-arch 256,256 \
+  --reward-shaping-scale 0 \
+  --bc-teacher public_metal_archaludon \
+  --bc-samples 12000 \
+  --bc-coef 0.40 \
+  --eval-opponent "$POOL" \
+  --eval-games 60 \
+  --eval-freq 1024 \
+  --best-save-path models/best/ppo_rich_broad_best \
   --device cuda
 ```
+
+`--device auto` now resolves to `cuda` when PyTorch can see a CUDA GPU and
+prints `torch_device=...` at startup. Keep `--n-envs` high for speed: the neural
+network updates run on GPU, but game simulation and legal-action generation are
+still CPU work. In-training evaluation must use subprocess envs; do not combine
+`--eval-opponent` with `--start-method dummy` or a single env.
 
 Evaluate a checkpoint:
 

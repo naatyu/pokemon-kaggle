@@ -18,6 +18,7 @@ if str(SAMPLE_SUBMISSION) not in sys.path:
 from cg.api import AreaType, LogType, OptionType, SelectContext, to_observation_class  # noqa: E402
 from cg.game import battle_finish, battle_select, battle_start  # noqa: E402
 
+from agents.card_db import load_card_db  # noqa: E402
 from agents.deck_loader import load_deck  # noqa: E402
 from agents.deck_profiles import PROFILES  # noqa: E402
 from agents.heuristic_agent import score_option  # noqa: E402
@@ -26,8 +27,11 @@ from rl.opponents import Opponent, make_opponent  # noqa: E402
 
 MAX_OPTIONS = 256
 NOOP_ACTION = MAX_OPTIONS
-GLOBAL_FEATURES = 32
-OPTION_FEATURES = 10
+BASE_FEATURES = 40
+BOARD_SLOTS_PER_PLAYER = 6
+POKEMON_FEATURES = 10
+GLOBAL_FEATURES = BASE_FEATURES + 2 * BOARD_SLOTS_PER_PLAYER * POKEMON_FEATURES
+OPTION_FEATURES = 16
 OBS_SIZE = GLOBAL_FEATURES + MAX_OPTIONS * OPTION_FEATURES
 
 
@@ -39,6 +43,7 @@ class PTCGEnv(gym.Env):
         deck: str = "hydrapple",
         opponent: str = "random_abomasnow",
         max_steps: int = 2500,
+        reward_shaping_scale: float = 1.0,
         seed: int | None = None,
     ):
         super().__init__()
@@ -49,6 +54,7 @@ class PTCGEnv(gym.Env):
         self.opponent_name = self.opponent_names[0]
         self.opponent: Opponent = make_opponent(self.opponent_name)
         self.max_steps = max_steps
+        self.reward_shaping_scale = reward_shaping_scale
         self.rng = random.Random(seed)
         self.action_space = spaces.Discrete(MAX_OPTIONS + 1)
         self.observation_space = spaces.Box(low=-10.0, high=10.0, shape=(OBS_SIZE,), dtype=np.float32)
@@ -92,7 +98,7 @@ class PTCGEnv(gym.Env):
 
         self.steps += 1
         selected = self._action_to_selection(action)
-        action_reward = self._action_shaping(action)
+        action_reward = self.reward_shaping_scale * self._action_shaping(action)
         try:
             self.obs_dict = battle_select(selected)
         except Exception as exc:
@@ -287,8 +293,27 @@ class PTCGEnv(gym.Env):
             (select.minCount if select else 0) / 6.0,
             (select.maxCount if select else 0) / 6.0,
             len(select.option if select else []) / MAX_OPTIONS,
+            float(me.asleep),
+            float(me.burned),
+            float(me.confused),
+            float(me.paralyzed),
+            float(me.poisoned),
+            float(opp.asleep),
+            float(opp.burned),
+            float(opp.confused),
+            float(opp.paralyzed),
+            float(opp.poisoned),
+            len(me.discard) / 60.0,
+            len(opp.discard) / 60.0,
         ]
         features[: len(global_values)] = global_values
+        offset = BASE_FEATURES
+        for player in (me, opp):
+            board = list(player.active[:1]) + list(player.bench[: BOARD_SLOTS_PER_PLAYER - 1])
+            for slot in range(BOARD_SLOTS_PER_PLAYER):
+                pokemon = board[slot] if slot < len(board) else None
+                features[offset : offset + POKEMON_FEATURES] = _pokemon_features(pokemon, active_slot=(slot == 0))
+                offset += POKEMON_FEATURES
 
         if select is not None:
             for index, option_index in enumerate(self._ranked_option_indices(obs)):
@@ -296,6 +321,7 @@ class PTCGEnv(gym.Env):
                 offset = GLOBAL_FEATURES + index * OPTION_FEATURES
                 card_id = _option_card_id(obs, option)
                 heuristic_score = _safe_score_option(obs, option, self.profile)
+                card = load_card_db().get(card_id) if card_id is not None else None
                 features[offset : offset + OPTION_FEATURES] = [
                     option.type / 20.0,
                     (card_id or 0) / 1300.0,
@@ -307,6 +333,12 @@ class PTCGEnv(gym.Env):
                     (option.attackId or 0) / 2000.0,
                     (option.number or 0) / 10.0,
                     np.clip(heuristic_score / 3000.0, -1.0, 1.0),
+                    _card_hp(card),
+                    _card_attack_damage(card),
+                    float(card.is_pokemon) if card else 0.0,
+                    float(card.is_energy) if card else 0.0,
+                    float(card_id in self.profile.main_attackers) if card_id is not None else 0.0,
+                    float(card_id in self.profile.draw_search_cards) if card_id is not None else 0.0,
                 ]
         return features
 
@@ -344,6 +376,38 @@ def _pokemon_hp(pokemon) -> float:
 
 def _pokemon_energy_count(pokemon) -> float:
     return 0.0 if pokemon is None else len(pokemon.energyCards) / 8.0
+
+
+def _pokemon_features(pokemon, active_slot: bool) -> np.ndarray:
+    if pokemon is None:
+        return np.zeros(POKEMON_FEATURES, dtype=np.float32)
+    return np.asarray(
+        [
+            1.0,
+            float(active_slot),
+            pokemon.id / 1300.0,
+            _pokemon_hp(pokemon),
+            pokemon.maxHp / 400.0,
+            len(pokemon.energyCards) / 8.0,
+            len(pokemon.tools) / 4.0,
+            len(pokemon.preEvolution) / 4.0,
+            float(pokemon.appearThisTurn),
+            pokemon.serial / 200.0,
+        ],
+        dtype=np.float32,
+    )
+
+
+def _card_hp(card) -> float:
+    if card is None:
+        return 0.0
+    return card.hp / 400.0
+
+
+def _card_attack_damage(card) -> float:
+    if card is None:
+        return 0.0
+    return card.attack_damage / 400.0
 
 
 def _option_card_id(obs, option) -> int | None:
