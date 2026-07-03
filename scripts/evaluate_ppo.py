@@ -21,7 +21,7 @@ def main() -> None:
     parser.add_argument("--games", type=int, default=50)
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--deterministic", action="store_true")
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="auto")
     args = parser.parse_args()
 
     model = MaskablePPO.load(args.model, device=args.device)

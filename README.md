@@ -101,8 +101,7 @@ Train against the random Abomasnow deck:
 uv run python scripts/train_ppo.py \
   --opponent random_abomasnow \
   --timesteps 20000 \
-  --save-path models/ppo_ranked_random20k \
-  --device cpu
+  --save-path models/ppo_ranked_random20k
 ```
 
 Evaluate a checkpoint:
@@ -112,8 +111,7 @@ uv run python scripts/evaluate_ppo.py \
   --model models/ppo_ranked_random20k.zip \
   --opponent random_abomasnow \
   --games 100 \
-  --deterministic \
-  --device cpu
+  --deterministic
 ```
 
 Current local results:

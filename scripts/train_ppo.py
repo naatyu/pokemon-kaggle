@@ -21,7 +21,7 @@ def main() -> None:
     parser.add_argument("--load-path", type=Path)
     parser.add_argument("--save-path", type=Path, default=PROJECT_ROOT / "models" / "ppo_hydrapple_v0")
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="auto")
     args = parser.parse_args()
 
     env = PTCGEnv(deck=args.deck, opponent=args.opponent, seed=args.seed)
