@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from rl.device import resolve_torch_device
+from rl.device import configure_torch_runtime, describe_torch_device, resolve_torch_device
 from rl.ptcg_env import PTCGEnv
 
 
@@ -27,6 +27,8 @@ def main() -> None:
     parser.add_argument("--csv", action="store_true")
     args = parser.parse_args()
     args.device = resolve_torch_device(args.device)
+    configure_torch_runtime(args.device)
+    print(describe_torch_device(args.device), file=sys.stderr)
 
     model = MaskablePPO.load(args.model, device=args.device)
     wins = losses = draws = truncated = 0
@@ -50,7 +52,7 @@ def main() -> None:
         else:
             draws += 1
         env.close()
-        if not args.quiet:
+        if not args.quiet and not args.csv:
             print(f"game={game + 1} reward={total_reward:.3f} terminal={terminal_reward:.1f}")
     if args.csv:
         print(

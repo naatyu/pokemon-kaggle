@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from cg.api import to_observation_class  # noqa: E402
-from rl.device import resolve_torch_device  # noqa: E402
+from rl.device import configure_torch_runtime, describe_torch_device, resolve_torch_device  # noqa: E402
 from rl.ptcg_env import NOOP_ACTION, PTCGEnv  # noqa: E402
 
 
@@ -28,6 +28,8 @@ def main() -> None:
     parser.add_argument("--deterministic", action="store_true")
     args = parser.parse_args()
     args.device = resolve_torch_device(args.device)
+    configure_torch_runtime(args.device)
+    print(describe_torch_device(args.device), file=sys.stderr)
 
     model = MaskablePPO.load(args.model, device=args.device)
     totals = {"wins": 0, "losses": 0, "draws": 0, "truncated": 0}

@@ -124,10 +124,30 @@ uv run python scripts/train_ppo.py \
 ```
 
 `--device auto` now resolves to `cuda` when PyTorch can see a CUDA GPU and
-prints `torch_device=...` at startup. Keep `--n-envs` high for speed: the neural
-network updates run on GPU, but game simulation and legal-action generation are
-still CPU work. In-training evaluation must use subprocess envs; do not combine
-`--eval-opponent` with `--start-method dummy` or a single env.
+prints the resolved CUDA card at startup. Keep `--n-envs` high for speed: the
+neural network updates run on GPU, but game simulation, public-agent calls, and
+legal-action generation are still CPU work. In-training evaluation must use
+subprocess envs; do not combine `--eval-opponent` with `--start-method dummy`
+or a single env.
+
+Behavioral-cloning pretraining has the same split: teacher trajectory
+collection is CPU-bound, then cross-entropy training runs on `--device`. Use
+multiple collection workers for the public teachers:
+
+```bash
+uv run python scripts/pretrain_ppo_bc.py \
+  --deck metal_archaludon \
+  --teacher public_metal_archaludon \
+  --opponent public_metal_archaludon,public_multiply_940,public_mega_lucario_v62 \
+  --samples 60000 \
+  --epochs 10 \
+  --batch-size 1024 \
+  --policy action \
+  --policy-hidden-dim 512 \
+  --collection-workers 8 \
+  --device cuda \
+  --save-path models/ppo_action512_bc_public_metal_60k
+```
 
 `--policy action` is the recommended policy for new checkpoints. It scores each
 ranked action choice with shared action-slot weights, using the global board
@@ -160,6 +180,18 @@ models/ppo_mixed_fixed_100k.zip vs heuristic_hydrapple: 21/50 wins
 Use `--opponent a,b,c` to sample opponents per episode. The simulator is
 process-global inside one Python process, so speed comes from `SubprocVecEnv`
 with separate simulator processes rather than from GPU alone.
+
+Check whether a checkpoint is actually copying the public teacher's decisions:
+
+```bash
+uv run python scripts/analyze_teacher_agreement.py \
+  --model models/best/ppo_action_broad_best.zip \
+  --deck metal_archaludon \
+  --teacher public_metal_archaludon \
+  --opponent public_metal_archaludon \
+  --samples 3000 \
+  --device cuda
+```
 
 See [docs/ppo_public_agent_findings.md](docs/ppo_public_agent_findings.md) for
 public-agent experiments, behavioral cloning results, and the current diagnosis

@@ -124,6 +124,10 @@ Changing deck and increasing model size did not fix the top-agent gap.
 `scripts/pretrain_ppo_bc.py` collects decisions from a public teacher and
 pretrains a MaskablePPO policy by cross-entropy.
 
+Runtime note: collection is CPU-bound because it runs the simulator and public
+teacher agent. The training epochs run on `--device`, and
+`--collection-workers` parallelizes the collection phase.
+
 `models/ppo_bc_public_metal_30k.zip`, trained from the public Metal teacher:
 
 ```text
@@ -288,7 +292,40 @@ PPO fine-tuning from this 100k BC checkpoint started at `25/60` mixed eval,
 then fell to `17/60` and `18/60` at the next checkpoints, so that run was
 stopped early. The current best remains `models/best/ppo_action_broad_best.zip`.
 
+`models/ppo_action512_bc_public_metal_60k.zip` tested a wider action-aware
+policy with hidden size 512, 60k teacher samples, 10 epochs, CUDA training, and
+8 parallel collection workers. It reached BC top-1 accuracy `0.576`. A quick
+20-game sweep did not improve the current best:
+
+```text
+public_metal_archaludon: 1/20
+public_multiply_940: 1/20
+public_mega_lucario_v62: 1/20
+public_crustle_v1: 0/20
+heuristic_hydrapple: 11/20
+```
+
+Teacher agreement against public Metal over 1k states was exact `0.576` and
+near-rank `0.795`, so width alone is not the limiting factor.
+
 ## Diagnosis
+
+`scripts/analyze_teacher_agreement.py` measures whether a checkpoint picks the
+same ranked action as a public teacher while rolling forward with the teacher's
+own actions.
+
+On 3k public-Metal teacher states against `public_metal_archaludon`:
+
+```text
+models/best/ppo_action_broad_best.zip: exact 0.540, near-rank 0.835
+models/ppo_action_bc_public_metal_100k.zip: exact 0.621, near-rank 0.871
+models/ppo_action_bc_public_metal_mirror_60k.zip: exact 0.597, near-rank 0.874
+```
+
+So even the stronger BC models still disagree with the teacher on roughly
+38-46% of tactical decisions. Most errors are close rank disagreements, but in
+Pokemon that can still mean missing a setup card, attachment, evolution, or
+attack timing window.
 
 The analyzer shows PPO still chooses heuristic rank 0 most of the time,
 especially in losses. With `models/best/ppo_rich_broad_best.zip`:

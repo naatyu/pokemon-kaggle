@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from rl.ptcg_env import PTCGEnv
 from rl.opponents import make_opponent
 from rl.ptcg_env import NOOP_ACTION
-from rl.device import resolve_torch_device
+from rl.device import configure_torch_runtime, describe_torch_device, resolve_torch_device
 from rl.action_policy import ActionMaskablePolicy
 from cg.api import to_observation_class
 
@@ -295,7 +295,8 @@ def main() -> None:
     parser.add_argument("--best-save-path", type=Path)
     args = parser.parse_args()
     args.device = resolve_torch_device(args.device)
-    print(f"torch_device={args.device}")
+    configure_torch_runtime(args.device)
+    print(describe_torch_device(args.device), file=sys.stderr)
     if args.eval_opponent and args.eval_freq > 0 and (args.n_envs <= 1 or args.start_method == "dummy"):
         raise ValueError("In-training evaluation needs subprocess envs; use --n-envs > 1 and --start-method spawn/forkserver/fork.")
 
