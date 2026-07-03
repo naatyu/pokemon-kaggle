@@ -265,6 +265,29 @@ PPO fine-tuning from this checkpoint produced the current best mixed result
 (`27/60`) and improved some public matchups further, but still did not solve
 public Metal.
 
+A larger BC run, `models/ppo_action_bc_public_metal_100k.zip`, used 100k
+teacher samples and 10 epochs. It reached BC top-1 accuracy `0.609`, but did
+not become the best general checkpoint:
+
+```text
+public_metal_archaludon: 2/40
+public_multiply_940: 2/40
+public_mega_lucario_v62: 5/40
+public_crustle_v1: 10/40
+public_phantom_dragapult: 5/40
+public_froslass_sleep: 15/40
+public_kangaskhan_pressure: 18/40
+heuristic_hydrapple: 20/40
+heuristic_dragapult: 29/40
+random_abomasnow: 29/40
+```
+
+This stronger clone improved public Metal relative to 30k BC and improved
+Crustle, but it lost generality on the local heuristics and Kangaskhan.
+PPO fine-tuning from this 100k BC checkpoint started at `25/60` mixed eval,
+then fell to `17/60` and `18/60` at the next checkpoints, so that run was
+stopped early. The current best remains `models/best/ppo_action_broad_best.zip`.
+
 ## Diagnosis
 
 The analyzer shows PPO still chooses heuristic rank 0 most of the time,
