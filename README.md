@@ -95,34 +95,45 @@ The PPO environment lives in `rl/ptcg_env.py`. It uses legal action masks and
 orders legal options by the current heuristic score, so action ranks are more
 stable than raw simulator option indexes.
 
-Train against the random Abomasnow deck:
+Fast mixed-opponent training:
 
 ```bash
 uv run python scripts/train_ppo.py \
-  --opponent random_abomasnow \
-  --timesteps 20000 \
-  --save-path models/ppo_ranked_random20k
+  --opponent random_abomasnow,heuristic_hydrapple \
+  --timesteps 100000 \
+  --load-path models/ppo_ranked_random20k.zip \
+  --save-path models/ppo_mixed_fixed_100k \
+  --n-envs 16 \
+  --n-steps 128 \
+  --batch-size 512 \
+  --learning-rate 0.0001 \
+  --ent-coef 0.01 \
+  --device cuda
 ```
 
 Evaluate a checkpoint:
 
 ```bash
 uv run python scripts/evaluate_ppo.py \
-  --model models/ppo_ranked_random20k.zip \
+  --model models/ppo_mixed_fixed_100k.zip \
   --opponent random_abomasnow \
   --games 100 \
-  --deterministic
+  --deterministic \
+  --device cuda
 ```
 
 Current local results:
 
 ```text
-models/ppo_ranked_random20k.zip vs random_abomasnow: 63/100 wins
-models/ppo_ranked_random20k.zip vs heuristic_hydrapple: 19/50 wins
-models/ppo_ranked_heuristic20k.zip vs random_abomasnow: 36/50 wins
-models/ppo_ranked_heuristic20k.zip vs heuristic_hydrapple: 9/50 wins
+single-env CPU benchmark: about 212 fps
+16-env CUDA/subprocess benchmark: about 903-945 fps
+
+models/ppo_ranked_random20k.zip vs random_abomasnow: 65/100 wins
+models/ppo_ranked_random20k.zip vs heuristic_hydrapple: 15/50 wins
+models/ppo_mixed_fixed_100k.zip vs random_abomasnow: 66/100 wins
+models/ppo_mixed_fixed_100k.zip vs heuristic_hydrapple: 21/50 wins
 ```
 
-The random-trained PPO is the useful first baseline. The direct heuristic
-fine-tune overfit/regressed, so the next step should be mixed-opponent training
-rather than one-opponent fine-tuning.
+Use `--opponent a,b,c` to sample opponents per episode. The simulator is
+process-global inside one Python process, so speed comes from `SubprocVecEnv`
+with separate simulator processes rather than from GPU alone.

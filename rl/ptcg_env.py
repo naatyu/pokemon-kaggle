@@ -45,8 +45,9 @@ class PTCGEnv(gym.Env):
         self.deck_name = deck
         self.profile = PROFILES[deck]
         self.deck = load_deck(PROJECT_ROOT / self.profile.deck_path)
-        self.opponent_name = opponent
-        self.opponent: Opponent = make_opponent(opponent)
+        self.opponent_names = _parse_opponent_names(opponent)
+        self.opponent_name = self.opponent_names[0]
+        self.opponent: Opponent = make_opponent(self.opponent_name)
         self.max_steps = max_steps
         self.rng = random.Random(seed)
         self.action_space = spaces.Discrete(MAX_OPTIONS + 1)
@@ -63,6 +64,7 @@ class PTCGEnv(gym.Env):
         if seed is not None:
             self.rng.seed(seed)
         self._finish_if_needed()
+        self.opponent_name = self.rng.choice(self.opponent_names)
         self.opponent = make_opponent(self.opponent_name)
         obs, start_data = battle_start(self.deck, self.opponent.deck())
         if obs is None:
@@ -75,7 +77,7 @@ class PTCGEnv(gym.Env):
         reward, terminated = self._advance_opponent_until_player()
         if terminated:
             self.finished = True
-        return self._features(), {"terminal_on_reset": terminated, "reward": reward}
+        return self._features(), {"terminal_on_reset": terminated, "reward": reward, "opponent": self.opponent_name}
 
     def step(self, action: int):
         if self.obs_dict is None:
@@ -103,8 +105,11 @@ class PTCGEnv(gym.Env):
         if not terminated:
             opp_reward, terminated = self._advance_opponent_until_player()
             reward += opp_reward
-            terminal_reward, terminated_after_opp = self._terminal_reward()
-            terminated = terminated or terminated_after_opp
+            if terminated:
+                terminal_reward, _ = self._terminal_reward()
+            else:
+                terminal_reward, terminated_after_opp = self._terminal_reward()
+                terminated = terminated_after_opp
 
         truncated = self.steps >= self.max_steps and not terminated
         if truncated:
@@ -116,7 +121,7 @@ class PTCGEnv(gym.Env):
             self.finished = True
             self._finish_if_needed()
 
-        return self._features(), float(reward), terminated, truncated, {"selection": selected}
+        return self._features(), float(reward), terminated, truncated, {"selection": selected, "opponent": self.opponent_name}
 
     def close(self):
         self._finish_if_needed()
@@ -143,9 +148,9 @@ class PTCGEnv(gym.Env):
         reward = 0.0
         for _ in range(self.max_steps):
             obs = to_observation_class(self.obs_dict)
-            terminal_reward, terminated = self._terminal_reward()
+            _, terminated = self._terminal_reward()
             if terminated:
-                return reward + terminal_reward, True
+                return reward, True
             if obs.current is None or obs.current.yourIndex == 0:
                 return reward, False
             try:
@@ -191,6 +196,8 @@ class PTCGEnv(gym.Env):
             return 0.0
         option = obs.select.option[ranked_options[action]]
         reward = 0.0
+        if 0 <= action < 5:
+            reward += (5 - action) * 0.001
         if option.type == OptionType.ATTACK:
             reward += 0.02
         elif option.type == OptionType.EVOLVE:
@@ -288,6 +295,7 @@ class PTCGEnv(gym.Env):
                 option = select.option[option_index]
                 offset = GLOBAL_FEATURES + index * OPTION_FEATURES
                 card_id = _option_card_id(obs, option)
+                heuristic_score = _safe_score_option(obs, option, self.profile)
                 features[offset : offset + OPTION_FEATURES] = [
                     option.type / 20.0,
                     (card_id or 0) / 1300.0,
@@ -298,7 +306,7 @@ class PTCGEnv(gym.Env):
                     (option.inPlayIndex or 0) / 8.0,
                     (option.attackId or 0) / 2000.0,
                     (option.number or 0) / 10.0,
-                    1.0 if index < len(select.option) else 0.0,
+                    np.clip(heuristic_score / 3000.0, -1.0, 1.0),
                 ]
         return features
 
@@ -309,10 +317,7 @@ class PTCGEnv(gym.Env):
         option_count = min(len(select.option), MAX_OPTIONS)
         scored: list[tuple[int, int]] = []
         for index, option in enumerate(select.option[:option_count]):
-            try:
-                score = score_option(obs, option, self.profile)
-            except Exception:
-                score = 0
+            score = _safe_score_option(obs, option, self.profile)
             scored.append((score, index))
         scored.sort(key=lambda item: (-item[0], item[1]))
         return [index for _, index in scored]
@@ -366,3 +371,17 @@ def _option_card_id(obs, option) -> int | None:
     except Exception:
         return None
     return None
+
+
+def _safe_score_option(obs, option, profile) -> int:
+    try:
+        return score_option(obs, option, profile)
+    except Exception:
+        return 0
+
+
+def _parse_opponent_names(opponent: str) -> list[str]:
+    names = [name.strip() for name in opponent.split(",") if name.strip()]
+    if not names:
+        raise ValueError("At least one opponent is required.")
+    return names
