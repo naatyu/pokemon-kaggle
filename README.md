@@ -116,6 +116,7 @@ uv run python scripts/train_ppo.py \
   --attack-embedding-dim 16 \
   --effect-features \
   --reward-shaping-scale 0 \
+  --tempo-reward-scale 0 \
   --bc-teacher public_metal_archaludon \
   --bc-samples 6000 \
   --bc-coef 0.40 \
@@ -161,6 +162,10 @@ each ranked action choice with shared action-slot weights, and also embeds card
 IDs and attack IDs categorically instead of treating them only as continuous
 numbers. Use `--effect-features` consistently for training, evaluation, and
 analysis of checkpoints trained with those extra state signals.
+
+`--tempo-reward-scale` adds optional dense reward for board setup, ready
+attackers, useful energy placement, and prize tempo. Keep it at `0` for broad
+baselines; use small values such as `0.05` only for focused experiments.
 
 Evaluate a checkpoint:
 

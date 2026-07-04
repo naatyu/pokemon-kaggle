@@ -66,6 +66,22 @@ random_abomasnow: 34/40
 against `public_metal_archaludon`. Its in-training best was `4/40`, but an
 external 40-game check produced `2/40`, so it is not a better general checkpoint.
 
+`models/best/ppo_action_embed_metal_tempo_best.zip` tested public-Metal-only
+fine-tuning from `models/ppo_action_embed_broad_50k.zip` with
+`--tempo-reward-scale 0.05`, `5e-6` learning rate, and stronger BC
+regularization. In-training public-Metal eval peaked at `3/40`. An external
+80-game check produced:
+
+```text
+public_metal_archaludon: 6/80
+```
+
+The final checkpoint regressed to `3/80`, so best-checkpoint selection matters.
+This is slightly better for public Metal, but it is not a new aggregate best:
+20-game checks showed `public_multiply_940` falling to `1/20`, while easier
+matchups such as `public_kangaskhan_pressure`, local heuristics, and random
+remained strong.
+
 ## Hydrapple PPO
 
 `models/ppo_mixed_fixed_100k.zip`:
@@ -407,8 +423,9 @@ highest-value changes are:
 2. Per-opponent curriculum with best-checkpoint selection, not final-checkpoint
    selection.
 3. Public-Metal-specific training with a better reward. Focused public-Metal PPO improved
-   rollout reward from about `-0.29` toward `-0.04`, while held-out wins fell as
-   low as `0/40`; reward and actual win probability are still misaligned.
+   rollout reward from about `-0.29` toward roughly `-0.07`, but held-out wins
+   still stayed around `0-3/40`; reward and actual win probability are still
+   misaligned.
 4. A public-Metal-specific teacher or value target. The current public-Metal
    teacher helps general play, but imitation still does not reproduce the
    teacher's own public-Metal matchup strength.

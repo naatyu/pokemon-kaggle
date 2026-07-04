@@ -47,6 +47,7 @@ class PTCGEnv(gym.Env):
         opponent: str = "random_abomasnow",
         max_steps: int = 2500,
         reward_shaping_scale: float = 1.0,
+        tempo_reward_scale: float = 0.0,
         effect_features: bool = False,
         seed: int | None = None,
     ):
@@ -59,6 +60,7 @@ class PTCGEnv(gym.Env):
         self.opponent: Opponent = make_opponent(self.opponent_name)
         self.max_steps = max_steps
         self.reward_shaping_scale = reward_shaping_scale
+        self.tempo_reward_scale = tempo_reward_scale
         self.effect_features = effect_features
         self.rng = random.Random(seed)
         self.action_space = spaces.Discrete(MAX_OPTIONS + 1)
@@ -67,6 +69,7 @@ class PTCGEnv(gym.Env):
         self.steps = 0
         self.prev_my_prizes = 6
         self.prev_opp_prizes = 6
+        self.prev_tempo_score = 0.0
         self.finished = False
         self.battle_active = False
 
@@ -92,7 +95,9 @@ class PTCGEnv(gym.Env):
         self.steps = 0
         self.finished = False
         self._sync_prize_baseline()
+        self.prev_tempo_score = self._tempo_score()
         reward, terminated = self._advance_opponent_until_player()
+        self.prev_tempo_score = self._tempo_score()
         if terminated:
             self.finished = True
         return self._features(), {"terminal_on_reset": terminated, "reward": reward, "opponent": self.opponent_name}
@@ -128,6 +133,7 @@ class PTCGEnv(gym.Env):
             else:
                 terminal_reward, terminated_after_opp = self._terminal_reward()
                 terminated = terminated_after_opp
+        reward += self._tempo_delta_reward()
 
         truncated = self.steps >= self.max_steps and not terminated
         if truncated:
@@ -228,6 +234,27 @@ class PTCGEnv(gym.Env):
         self.prev_my_prizes = my_prizes
         self.prev_opp_prizes = opp_prizes
         return reward
+
+    def _tempo_delta_reward(self) -> float:
+        if self.tempo_reward_scale <= 0:
+            return 0.0
+        current_score = self._tempo_score()
+        reward = self.tempo_reward_scale * (current_score - self.prev_tempo_score)
+        self.prev_tempo_score = current_score
+        return reward
+
+    def _tempo_score(self) -> float:
+        if self.obs_dict is None:
+            return 0.0
+        obs = to_observation_class(self.obs_dict)
+        if obs.current is None:
+            return 0.0
+        me = obs.current.players[0]
+        opp = obs.current.players[1]
+        my_score = _player_tempo_score(me, self.profile, active_bonus=True)
+        opp_score = _player_tempo_score(opp, self.profile, active_bonus=False)
+        prize_score = (6 - len(opp.prize)) * 0.8 - (6 - len(me.prize)) * 0.8
+        return prize_score + my_score - 0.35 * opp_score
 
     def _terminal_reward(self) -> tuple[float, bool]:
         if self.obs_dict is None:
@@ -445,6 +472,35 @@ def _profile_discard_signal(player, profile) -> float:
     recovery = sum(1 for card in discard if card and card.id in profile.recovery_cards)
     discarded_attackers = sum(1 for card in discard if card and card.id in attackers)
     return min((energy + recovery + 2 * discarded_attackers) / 20.0, 1.0)
+
+
+def _player_tempo_score(player, profile, active_bonus: bool) -> float:
+    board = list(player.active or []) + list(player.bench or [])
+    if not board:
+        return -1.0
+    score = 0.0
+    attackers = profile.main_attackers | profile.backup_attackers
+    for index, pokemon in enumerate(board):
+        if pokemon is None:
+            continue
+        energy_count = len(pokemon.energyCards)
+        hp_ratio = _pokemon_hp(pokemon)
+        if pokemon.id in profile.main_attackers:
+            score += 1.0
+        elif pokemon.id in profile.backup_attackers:
+            score += 0.65
+        elif pokemon.id in profile.setup_basics:
+            score += 0.4
+        elif pokemon.id in profile.evolution_targets:
+            score += 0.5
+        if pokemon.id in profile.energy_targets or pokemon.id in attackers:
+            score += min(energy_count, 3) * 0.22
+            if energy_count >= 3:
+                score += 0.6
+        if index == 0 and active_bonus:
+            score += 0.2 * hp_ratio
+    score += min(len(player.bench or []), 3) * 0.08
+    return score
 
 
 def _pokemon_features(pokemon, active_slot: bool) -> np.ndarray:

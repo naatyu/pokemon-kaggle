@@ -30,13 +30,22 @@ def parse_net_arch(value: str) -> list[int]:
     return layers
 
 
-def make_env(deck: str, opponent: str, seed: int, rank: int, reward_shaping_scale: float, effect_features: bool):
+def make_env(
+    deck: str,
+    opponent: str,
+    seed: int,
+    rank: int,
+    reward_shaping_scale: float,
+    tempo_reward_scale: float,
+    effect_features: bool,
+):
     def _init():
         return Monitor(
             PTCGEnv(
                 deck=deck,
                 opponent=opponent,
                 reward_shaping_scale=reward_shaping_scale,
+                tempo_reward_scale=tempo_reward_scale,
                 effect_features=effect_features,
                 seed=seed + rank,
             )
@@ -52,6 +61,7 @@ def build_env(
     n_envs: int,
     start_method: str,
     reward_shaping_scale: float,
+    tempo_reward_scale: float,
     effect_features: bool,
 ) -> PTCGEnv | VecEnv:
     if n_envs <= 1:
@@ -59,10 +69,14 @@ def build_env(
             deck=deck,
             opponent=opponent,
             reward_shaping_scale=reward_shaping_scale,
+            tempo_reward_scale=tempo_reward_scale,
             effect_features=effect_features,
             seed=seed,
         )
-    env_fns = [make_env(deck, opponent, seed, rank, reward_shaping_scale, effect_features) for rank in range(n_envs)]
+    env_fns = [
+        make_env(deck, opponent, seed, rank, reward_shaping_scale, tempo_reward_scale, effect_features)
+        for rank in range(n_envs)
+    ]
     if start_method == "dummy":
         return DummyVecEnv(env_fns)
     return SubprocVecEnv(env_fns, start_method=start_method)
@@ -336,6 +350,7 @@ def main() -> None:
         help="Fill optional global prompt/effect feature slots. Use consistently for train/eval of the same model.",
     )
     parser.add_argument("--reward-shaping-scale", type=float, default=1.0)
+    parser.add_argument("--tempo-reward-scale", type=float, default=0.0)
     parser.add_argument("--bc-teacher")
     parser.add_argument("--bc-samples", type=int, default=0)
     parser.add_argument("--bc-coef", type=float, default=0.0)
@@ -359,6 +374,7 @@ def main() -> None:
         args.n_envs,
         args.start_method,
         args.reward_shaping_scale,
+        args.tempo_reward_scale,
         args.effect_features,
     )
     args.save_path.parent.mkdir(parents=True, exist_ok=True)
