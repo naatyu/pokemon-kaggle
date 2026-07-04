@@ -14,20 +14,40 @@ Historical note: `models/best/ppo_rich_broad_best.zip` was the best checkpoint
 before combo action choices. It should be treated as a historical result because
 the action mapping changed for multi-select states.
 
-`models/best/ppo_action_broad_best.zip` is the best current checkpoint. It uses
-the combo-action environment plus the action-aware policy from
-`rl/action_policy.py`. It starts from `models/ppo_action_bc_public_metal_30k.zip`
-and fine-tunes with:
+`models/best/ppo_action_embed_broad_best.zip` is the best aggregate checkpoint
+so far. It uses the combo-action environment, opt-in extra state features, and
+the embedded action-aware policy from `rl/action_policy.py`. It starts from
+`models/ppo_action_embed_effect_bc_public_metal_30k.zip` and fine-tunes with:
 
 - `--reward-shaping-scale 0`
 - low learning rate: `1e-5`
 - BC regularization from `public_metal_archaludon`
-- `--policy action`
+- `--policy action_embed`
 - mixed public/local opponent pool
 - in-training masked evaluation and best-checkpoint saving
 
-Mixed eval during training improved from `23/60` at step 0 to `27/60` at
-49k timesteps. The per-opponent 40-game sweep:
+The per-opponent 40-game sweep for `models/ppo_action_embed_broad_50k.zip`
+copied to `models/best/ppo_action_embed_broad_best.zip`:
+
+```text
+public_metal_archaludon: 1/40
+public_multiply_940: 7/40
+public_mega_lucario_v62: 9/40
+public_crustle_v1: 3/40
+public_phantom_dragapult: 6/40
+public_froslass_sleep: 23/40
+public_kangaskhan_pressure: 32/40
+heuristic_hydrapple: 32/40
+heuristic_dragapult: 33/40
+random_abomasnow: 36/40
+```
+
+This improves aggregate public-opponent wins from `64/280` for the previous
+best action-aware PPO to `81/280`, and local/random wins from `99/120` to
+`101/120`. It is still far from beating `public_metal_archaludon`.
+
+Historical note: `models/best/ppo_action_broad_best.zip` was the previous best
+aggregate checkpoint before card/attack embeddings:
 
 ```text
 public_metal_archaludon: 2/40
@@ -41,11 +61,6 @@ heuristic_hydrapple: 29/40
 heuristic_dragapult: 36/40
 random_abomasnow: 34/40
 ```
-
-This checkpoint beats both local heuristic agents decisively and improves
-several public matchups, especially `public_mega_lucario_v62`,
-`public_phantom_dragapult`, and `public_froslass_sleep`. It is still far from
-beating `public_metal_archaludon`.
 
 `models/best/ppo_combo_metal_focused_best.zip` was selected specifically
 against `public_metal_archaludon`. Its in-training best was `4/40`, but an
@@ -126,7 +141,10 @@ pretrains a MaskablePPO policy by cross-entropy.
 
 Runtime note: collection is CPU-bound because it runs the simulator and public
 teacher agent. The training epochs run on `--device`, and
-`--collection-workers` parallelizes the collection phase.
+`--collection-workers` parallelizes the collection phase. Large runs are
+memory-sensitive: 60k samples require roughly 1 GB for the final arrays before
+model/framework overhead, worker processes, and transfer copies. On a 32 GB
+machine, prefer 2-4 workers unless memory is being watched.
 
 `models/ppo_bc_public_metal_30k.zip`, trained from the public Metal teacher:
 
@@ -308,6 +326,28 @@ heuristic_hydrapple: 11/20
 Teacher agreement against public Metal over 1k states was exact `0.576` and
 near-rank `0.795`, so width alone is not the limiting factor.
 
+## Embedded Action Policy
+
+Card IDs and attack IDs were originally presented to the policy as continuous
+numbers, for example `190 / 1300`. That is a poor representation for
+card-specific rules. `EmbeddedActionMaskablePolicy` keeps the same observation
+shape but recovers card/attack IDs from the normalized features and embeds them
+categorically.
+
+The first 30k BC run with embeddings,
+`models/ppo_action_embed_effect_bc_public_metal_30k.zip`, reached BC top-1
+accuracy `0.593`, compared with `0.545` for the original 30k action-aware BC
+run. Teacher agreement over 1k public-Metal states was exact `0.619`.
+
+The raw embedded BC checkpoint was still not a strong player, but PPO
+fine-tuning from it produced the current best aggregate checkpoint:
+`models/ppo_action_embed_broad_50k.zip`.
+
+PPO reduced teacher agreement slightly, from `0.619` to `0.605` on the same
+1k public-Metal diagnostic, but improved aggregate wins. This suggests the
+embedded policy is a better starting representation, while PPO is still
+finding only shallow improvements against the strongest public agents.
+
 ## Diagnosis
 
 `scripts/analyze_teacher_agreement.py` measures whether a checkpoint picks the
@@ -342,6 +382,19 @@ avg_prizes: (5.4, 1.2)
 top_action_ranks: rank 0 dominates, then 1 and 3
 ```
 
+With `models/ppo_action_embed_broad_50k.zip`, public-Metal losses are still
+fast:
+
+```text
+public_metal_archaludon losses:
+avg_turn: 11.8
+avg_prizes: (4.6, 2.2)
+
+public_mega_lucario_v62 losses:
+avg_turn: 10.1
+avg_prizes: (5.1, 1.8)
+```
+
 That means losses are fast and decisive. The agent is not learning a distinct
 strategy; it mostly follows the heuristic ordering and loses before collecting
 useful corrective signal.
@@ -349,11 +402,11 @@ useful corrective signal.
 More raw PPO timesteps are unlikely to be enough by themselves. The current
 highest-value changes are:
 
-1. Stronger BC before PPO: larger datasets, validation accuracy, and possibly
-   sequence-level imitation for multi-select states.
+1. Stronger embedded BC before PPO: larger datasets, validation accuracy, and
+   possibly sequence-level imitation for multi-select states.
 2. Per-opponent curriculum with best-checkpoint selection, not final-checkpoint
    selection.
-3. A better reward for hard public matchups. Focused public-Metal PPO improved
+3. Public-Metal-specific training with a better reward. Focused public-Metal PPO improved
    rollout reward from about `-0.29` toward `-0.04`, while held-out wins fell as
    low as `0/40`; reward and actual win probability are still misaligned.
 4. A public-Metal-specific teacher or value target. The current public-Metal

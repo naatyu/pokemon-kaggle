@@ -19,7 +19,7 @@ from rl.ptcg_env import PTCGEnv
 from rl.opponents import make_opponent
 from rl.ptcg_env import NOOP_ACTION
 from rl.device import configure_torch_runtime, describe_torch_device, resolve_torch_device
-from rl.action_policy import ActionMaskablePolicy
+from rl.action_policy import ActionMaskablePolicy, EmbeddedActionMaskablePolicy
 from cg.api import to_observation_class
 
 
@@ -30,9 +30,17 @@ def parse_net_arch(value: str) -> list[int]:
     return layers
 
 
-def make_env(deck: str, opponent: str, seed: int, rank: int, reward_shaping_scale: float):
+def make_env(deck: str, opponent: str, seed: int, rank: int, reward_shaping_scale: float, effect_features: bool):
     def _init():
-        return Monitor(PTCGEnv(deck=deck, opponent=opponent, reward_shaping_scale=reward_shaping_scale, seed=seed + rank))
+        return Monitor(
+            PTCGEnv(
+                deck=deck,
+                opponent=opponent,
+                reward_shaping_scale=reward_shaping_scale,
+                effect_features=effect_features,
+                seed=seed + rank,
+            )
+        )
 
     return _init
 
@@ -44,22 +52,36 @@ def build_env(
     n_envs: int,
     start_method: str,
     reward_shaping_scale: float,
+    effect_features: bool,
 ) -> PTCGEnv | VecEnv:
     if n_envs <= 1:
-        return PTCGEnv(deck=deck, opponent=opponent, reward_shaping_scale=reward_shaping_scale, seed=seed)
-    env_fns = [make_env(deck, opponent, seed, rank, reward_shaping_scale) for rank in range(n_envs)]
+        return PTCGEnv(
+            deck=deck,
+            opponent=opponent,
+            reward_shaping_scale=reward_shaping_scale,
+            effect_features=effect_features,
+            seed=seed,
+        )
+    env_fns = [make_env(deck, opponent, seed, rank, reward_shaping_scale, effect_features) for rank in range(n_envs)]
     if start_method == "dummy":
         return DummyVecEnv(env_fns)
     return SubprocVecEnv(env_fns, start_method=start_method)
 
 
 def build_model(args: argparse.Namespace, env: PTCGEnv | VecEnv) -> MaskablePPO:
-    policy = ActionMaskablePolicy if args.policy == "action" else "MlpPolicy"
-    policy_kwargs = (
-        {"hidden_dim": args.policy_hidden_dim}
-        if args.policy == "action"
-        else {"net_arch": args.net_arch}
-    )
+    if args.policy == "action":
+        policy = ActionMaskablePolicy
+        policy_kwargs = {"hidden_dim": args.policy_hidden_dim}
+    elif args.policy == "action_embed":
+        policy = EmbeddedActionMaskablePolicy
+        policy_kwargs = {
+            "hidden_dim": args.policy_hidden_dim,
+            "card_embedding_dim": args.card_embedding_dim,
+            "attack_embedding_dim": args.attack_embedding_dim,
+        }
+    else:
+        policy = "MlpPolicy"
+        policy_kwargs = {"net_arch": args.net_arch}
     model = MaskablePPO(
         policy,
         env,
@@ -140,6 +162,7 @@ class MaskedEvalCallback(BaseCallback):
         save_path: Path | None,
         seed: int,
         deterministic: bool = True,
+        effect_features: bool = False,
     ):
         super().__init__()
         self.deck = deck
@@ -149,13 +172,19 @@ class MaskedEvalCallback(BaseCallback):
         self.save_path = save_path
         self.seed = seed
         self.deterministic = deterministic
+        self.effect_features = effect_features
         self.best_win_rate = -1.0
+        self.last_eval_timestep = -1
 
     def _on_training_start(self) -> None:
         self._run_eval()
 
     def _on_step(self) -> bool:
-        if self.eval_freq <= 0 or self.n_calls % self.eval_freq != 0:
+        if self.eval_freq <= 0:
+            return True
+        current_bucket = self.num_timesteps // self.eval_freq
+        last_bucket = self.last_eval_timestep // self.eval_freq if self.last_eval_timestep >= 0 else -1
+        if current_bucket <= last_bucket:
             return True
         self._run_eval()
         return True
@@ -166,8 +195,9 @@ class MaskedEvalCallback(BaseCallback):
             deck=self.deck,
             opponent=self.opponent,
             games=self.games,
-            seed=self.seed + self.n_calls,
+            seed=self.seed + self.num_timesteps,
             deterministic=self.deterministic,
+            effect_features=self.effect_features,
         )
         win_rate = wins / self.games if self.games else 0.0
         self.logger.record("eval/win_rate", win_rate)
@@ -175,6 +205,7 @@ class MaskedEvalCallback(BaseCallback):
         self.logger.record("eval/losses", losses)
         self.logger.record("eval/draws", draws)
         self.logger.record("eval/truncated", truncated)
+        self.last_eval_timestep = self.num_timesteps
         print(
             f"eval step={self.num_timesteps} opponent={self.opponent} "
             f"wins={wins}/{self.games} win_rate={win_rate:.3f}"
@@ -186,8 +217,8 @@ class MaskedEvalCallback(BaseCallback):
             print(f"new_best_eval={win_rate:.3f} saved={self.save_path}")
 
 
-def collect_bc_data(deck: str, opponent: str, teacher_name: str, samples: int, seed: int):
-    env = PTCGEnv(deck=deck, opponent=opponent, seed=seed)
+def collect_bc_data(deck: str, opponent: str, teacher_name: str, samples: int, seed: int, effect_features: bool):
+    env = PTCGEnv(deck=deck, opponent=opponent, effect_features=effect_features, seed=seed)
     teacher = make_opponent(teacher_name)
     observations: list[np.ndarray] = []
     actions: list[int] = []
@@ -237,10 +268,24 @@ def teacher_action_to_rank(env: PTCGEnv, teacher) -> int | None:
         return None
 
 
-def evaluate_model(model: MaskablePPO, deck: str, opponent: str, games: int, seed: int, deterministic: bool):
+def evaluate_model(
+    model: MaskablePPO,
+    deck: str,
+    opponent: str,
+    games: int,
+    seed: int,
+    deterministic: bool,
+    effect_features: bool = False,
+):
     wins = losses = draws = truncated = 0
     for game in range(games):
-        env = PTCGEnv(deck=deck, opponent=opponent, reward_shaping_scale=0.0, seed=seed + game)
+        env = PTCGEnv(
+            deck=deck,
+            opponent=opponent,
+            reward_shaping_scale=0.0,
+            effect_features=effect_features,
+            seed=seed + game,
+        )
         obs, _ = env.reset(seed=seed + game)
         done = False
         was_truncated = False
@@ -280,9 +325,16 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--ent-coef", type=float, default=0.02)
-    parser.add_argument("--policy", choices=["mlp", "action"], default="mlp")
+    parser.add_argument("--policy", choices=["mlp", "action", "action_embed"], default="mlp")
     parser.add_argument("--policy-hidden-dim", type=int, default=256)
+    parser.add_argument("--card-embedding-dim", type=int, default=32)
+    parser.add_argument("--attack-embedding-dim", type=int, default=16)
     parser.add_argument("--net-arch", type=parse_net_arch, default=[64, 64])
+    parser.add_argument(
+        "--effect-features",
+        action="store_true",
+        help="Fill optional global prompt/effect feature slots. Use consistently for train/eval of the same model.",
+    )
     parser.add_argument("--reward-shaping-scale", type=float, default=1.0)
     parser.add_argument("--bc-teacher")
     parser.add_argument("--bc-samples", type=int, default=0)
@@ -300,13 +352,28 @@ def main() -> None:
     if args.eval_opponent and args.eval_freq > 0 and (args.n_envs <= 1 or args.start_method == "dummy"):
         raise ValueError("In-training evaluation needs subprocess envs; use --n-envs > 1 and --start-method spawn/forkserver/fork.")
 
-    env = build_env(args.deck, args.opponent, args.seed, args.n_envs, args.start_method, args.reward_shaping_scale)
+    env = build_env(
+        args.deck,
+        args.opponent,
+        args.seed,
+        args.n_envs,
+        args.start_method,
+        args.reward_shaping_scale,
+        args.effect_features,
+    )
     args.save_path.parent.mkdir(parents=True, exist_ok=True)
 
     model = build_model(args, env)
     callbacks = []
     if args.bc_teacher and args.bc_samples > 0 and args.bc_coef > 0:
-        observations, actions, masks = collect_bc_data(args.deck, args.opponent, args.bc_teacher, args.bc_samples, args.seed + 10_000)
+        observations, actions, masks = collect_bc_data(
+            args.deck,
+            args.opponent,
+            args.bc_teacher,
+            args.bc_samples,
+            args.seed + 10_000,
+            args.effect_features,
+        )
         callbacks.append(
             BCRegularizationCallback(
                 observations,
@@ -326,6 +393,7 @@ def main() -> None:
                 eval_freq=args.eval_freq,
                 save_path=args.best_save_path,
                 seed=args.seed + 20_000,
+                effect_features=args.effect_features,
             )
         )
     callback = CallbackList(callbacks) if len(callbacks) > 1 else callbacks[0] if callbacks else None

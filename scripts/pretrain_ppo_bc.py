@@ -15,8 +15,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from rl.opponents import make_opponent  # noqa: E402
 from rl.device import configure_torch_runtime, describe_torch_device, resolve_torch_device  # noqa: E402
-from rl.ptcg_env import NOOP_ACTION, PTCGEnv  # noqa: E402
-from rl.action_policy import ActionMaskablePolicy  # noqa: E402
+from rl.ptcg_env import MAX_OPTIONS, NOOP_ACTION, OBS_SIZE, PTCGEnv  # noqa: E402
+from rl.action_policy import ActionMaskablePolicy, EmbeddedActionMaskablePolicy  # noqa: E402
 from scripts.train_ppo import parse_net_arch  # noqa: E402
 from cg.api import to_observation_class  # noqa: E402
 
@@ -40,15 +40,22 @@ def main() -> None:
     parser.add_argument("--load-path", type=Path)
     parser.add_argument("--seed", type=int, default=31)
     parser.add_argument("--device", default="auto", help="Torch device: auto, cpu, cuda, or cuda:N.")
-    parser.add_argument("--policy", choices=["mlp", "action"], default="mlp")
+    parser.add_argument("--policy", choices=["mlp", "action", "action_embed"], default="mlp")
     parser.add_argument("--policy-hidden-dim", type=int, default=256)
+    parser.add_argument("--card-embedding-dim", type=int, default=32)
+    parser.add_argument("--attack-embedding-dim", type=int, default=16)
     parser.add_argument("--net-arch", type=parse_net_arch, default=[256, 256])
+    parser.add_argument(
+        "--effect-features",
+        action="store_true",
+        help="Fill optional global prompt/effect feature slots. Use consistently for train/eval of the same model.",
+    )
     args = parser.parse_args()
     args.device = resolve_torch_device(args.device)
     configure_torch_runtime(args.device)
     print(describe_torch_device(args.device), file=sys.stderr)
 
-    env = PTCGEnv(deck=args.deck, opponent=args.opponent, seed=args.seed)
+    env = PTCGEnv(deck=args.deck, opponent=args.opponent, effect_features=args.effect_features, seed=args.seed)
     teacher = make_opponent(args.teacher)
     model = _build_model(args, env)
     env.close()
@@ -59,6 +66,7 @@ def main() -> None:
         args.samples,
         args.seed,
         args.collection_workers,
+        args.effect_features,
     )
     train_bc(model, observations, actions, masks, args.epochs, args.batch_size)
     args.save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,12 +76,19 @@ def main() -> None:
 
 
 def _build_model(args: argparse.Namespace, env: PTCGEnv) -> MaskablePPO:
-    policy = ActionMaskablePolicy if args.policy == "action" else "MlpPolicy"
-    policy_kwargs = (
-        {"hidden_dim": args.policy_hidden_dim}
-        if args.policy == "action"
-        else {"net_arch": args.net_arch}
-    )
+    if args.policy == "action":
+        policy = ActionMaskablePolicy
+        policy_kwargs = {"hidden_dim": args.policy_hidden_dim}
+    elif args.policy == "action_embed":
+        policy = EmbeddedActionMaskablePolicy
+        policy_kwargs = {
+            "hidden_dim": args.policy_hidden_dim,
+            "card_embedding_dim": args.card_embedding_dim,
+            "attack_embedding_dim": args.attack_embedding_dim,
+        }
+    else:
+        policy = "MlpPolicy"
+        policy_kwargs = {"net_arch": args.net_arch}
     model = MaskablePPO(
         policy,
         env,
@@ -100,12 +115,23 @@ def collect_teacher_data(
     samples: int,
     seed: int,
     workers: int,
+    effect_features: bool,
 ):
+    estimated_gb = samples * (OBS_SIZE * np.dtype(np.float32).itemsize + (MAX_OPTIONS + 1) * np.dtype(bool).itemsize + np.dtype(np.int64).itemsize)
+    estimated_gb /= 1024**3
+    print(
+        f"collection_samples={samples} collection_workers={workers} "
+        f"dataset_memory_gb={estimated_gb:.2f}",
+        file=sys.stderr,
+    )
     if workers <= 1:
-        return _collect_teacher_data_worker(deck, opponent, teacher_name, samples, seed, "main")
+        return _collect_teacher_data_worker(deck, opponent, teacher_name, samples, seed, "main", effect_features)
 
     counts = _split_counts(samples, workers)
-    results = []
+    observations = np.empty((samples, OBS_SIZE), dtype=np.float32)
+    actions = np.empty(samples, dtype=np.int64)
+    masks = np.empty((samples, MAX_OPTIONS + 1), dtype=bool)
+    offset = 0
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(
@@ -116,21 +142,21 @@ def collect_teacher_data(
                 count,
                 seed + worker_index * 100_000,
                 f"worker={worker_index}",
+                effect_features,
             )
             for worker_index, count in enumerate(counts)
             if count > 0
         ]
         for future in as_completed(futures):
-            result = future.result()
-            results.append(result)
-            print(f"collection_worker_done samples={len(result[1])}")
+            worker_observations, worker_actions, worker_masks = future.result()
+            count = len(worker_actions)
+            observations[offset : offset + count] = worker_observations
+            actions[offset : offset + count] = worker_actions
+            masks[offset : offset + count] = worker_masks
+            offset += count
+            print(f"collection_worker_done samples={count} total={offset}")
 
-    observations, actions, masks = zip(*results)
-    return (
-        np.concatenate(observations).astype(np.float32, copy=False),
-        np.concatenate(actions).astype(np.int64, copy=False),
-        np.concatenate(masks).astype(bool, copy=False),
-    )
+    return observations[:offset], actions[:offset], masks[:offset]
 
 
 def _split_counts(total: int, parts: int) -> list[int]:
@@ -146,22 +172,25 @@ def _collect_teacher_data_worker(
     samples: int,
     seed: int,
     progress_prefix: str,
+    effect_features: bool,
 ):
-    env = PTCGEnv(deck=deck, opponent=opponent, seed=seed)
+    env = PTCGEnv(deck=deck, opponent=opponent, effect_features=effect_features, seed=seed)
     teacher = make_opponent(teacher_name)
-    observations: list[np.ndarray] = []
-    actions: list[int] = []
-    masks: list[np.ndarray] = []
+    observations = np.empty((samples, OBS_SIZE), dtype=np.float32)
+    actions = np.empty(samples, dtype=np.int64)
+    masks = np.empty((samples, MAX_OPTIONS + 1), dtype=bool)
     obs, _ = env.reset(seed=seed)
     games = 0
+    collected = 0
     try:
-        while len(actions) < samples:
+        while collected < samples:
             mask = env.action_masks()
             action = teacher_action_to_rank(env, teacher)
             if action is not None and mask[action]:
-                observations.append(obs)
-                actions.append(action)
-                masks.append(mask)
+                observations[collected] = obs
+                actions[collected] = action
+                masks[collected] = mask
+                collected += 1
             else:
                 legal = np.flatnonzero(mask)
                 action = int(legal[0])
@@ -170,11 +199,11 @@ def _collect_teacher_data_worker(
             if terminated or truncated:
                 games += 1
                 obs, _ = env.reset(seed=seed + games)
-            if len(actions) > 0 and len(actions) % 5000 == 0:
-                print(f"{progress_prefix} collected={len(actions)} games={games}")
+            if collected > 0 and collected % 5000 == 0:
+                print(f"{progress_prefix} collected={collected} games={games}")
     finally:
         env.close()
-    return np.asarray(observations, dtype=np.float32), np.asarray(actions, dtype=np.int64), np.asarray(masks, dtype=bool)
+    return observations[:collected], actions[:collected], masks[:collected]
 
 
 def teacher_action_to_rank(env: PTCGEnv, teacher) -> int | None:

@@ -102,24 +102,27 @@ POOL='public_metal_archaludon,public_multiply_940,public_mega_lucario_v62,public
 uv run python scripts/train_ppo.py \
   --deck metal_archaludon \
   --opponent "$POOL" \
-  --timesteps 100000 \
-  --load-path models/ppo_action_bc_public_metal_30k.zip \
-  --save-path models/ppo_action_broad_100k \
+  --timesteps 50000 \
+  --load-path models/ppo_action_embed_effect_bc_public_metal_30k.zip \
+  --save-path models/ppo_action_embed_broad_50k \
   --n-envs 16 \
   --n-steps 128 \
   --batch-size 512 \
   --learning-rate 0.00001 \
   --ent-coef 0.02 \
-  --policy action \
+  --policy action_embed \
   --policy-hidden-dim 256 \
+  --card-embedding-dim 32 \
+  --attack-embedding-dim 16 \
+  --effect-features \
   --reward-shaping-scale 0 \
   --bc-teacher public_metal_archaludon \
-  --bc-samples 12000 \
+  --bc-samples 6000 \
   --bc-coef 0.40 \
   --eval-opponent "$POOL" \
-  --eval-games 60 \
-  --eval-freq 1024 \
-  --best-save-path models/best/ppo_action_broad_best \
+  --eval-games 40 \
+  --eval-freq 4096 \
+  --best-save-path models/best/ppo_action_embed_broad_best \
   --device cuda
 ```
 
@@ -131,28 +134,33 @@ subprocess envs; do not combine `--eval-opponent` with `--start-method dummy`
 or a single env.
 
 Behavioral-cloning pretraining has the same split: teacher trajectory
-collection is CPU-bound, then cross-entropy training runs on `--device`. Use
-multiple collection workers for the public teachers:
+collection is CPU-bound, then cross-entropy training runs on `--device`.
+Collection keeps a large observation dataset in RAM; start with 2-4 collection
+workers on a 32 GB machine and increase only after watching memory use.
 
 ```bash
 uv run python scripts/pretrain_ppo_bc.py \
   --deck metal_archaludon \
   --teacher public_metal_archaludon \
   --opponent public_metal_archaludon,public_multiply_940,public_mega_lucario_v62 \
-  --samples 60000 \
-  --epochs 10 \
+  --samples 30000 \
+  --epochs 8 \
   --batch-size 1024 \
-  --policy action \
-  --policy-hidden-dim 512 \
-  --collection-workers 8 \
+  --policy action_embed \
+  --policy-hidden-dim 256 \
+  --card-embedding-dim 32 \
+  --attack-embedding-dim 16 \
+  --effect-features \
+  --collection-workers 2 \
   --device cuda \
-  --save-path models/ppo_action512_bc_public_metal_60k
+  --save-path models/ppo_action_embed_effect_bc_public_metal_30k
 ```
 
-`--policy action` is the recommended policy for new checkpoints. It scores each
-ranked action choice with shared action-slot weights, using the global board
-features plus the per-action features. It is slower than the flat MLP policy but
-has produced the strongest local and public-opponent baseline so far.
+`--policy action_embed` is the recommended policy for new checkpoints. It scores
+each ranked action choice with shared action-slot weights, and also embeds card
+IDs and attack IDs categorically instead of treating them only as continuous
+numbers. Use `--effect-features` consistently for training, evaluation, and
+analysis of checkpoints trained with those extra state signals.
 
 Evaluate a checkpoint:
 

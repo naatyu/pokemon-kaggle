@@ -47,6 +47,7 @@ class PTCGEnv(gym.Env):
         opponent: str = "random_abomasnow",
         max_steps: int = 2500,
         reward_shaping_scale: float = 1.0,
+        effect_features: bool = False,
         seed: int | None = None,
     ):
         super().__init__()
@@ -58,6 +59,7 @@ class PTCGEnv(gym.Env):
         self.opponent: Opponent = make_opponent(self.opponent_name)
         self.max_steps = max_steps
         self.reward_shaping_scale = reward_shaping_scale
+        self.effect_features = effect_features
         self.rng = random.Random(seed)
         self.action_space = spaces.Discrete(MAX_OPTIONS + 1)
         self.observation_space = spaces.Box(low=-10.0, high=10.0, shape=(OBS_SIZE,), dtype=np.float32)
@@ -307,6 +309,15 @@ class PTCGEnv(gym.Env):
             len(me.discard) / 60.0,
             len(opp.discard) / 60.0,
         ]
+        if self.effect_features and select is not None:
+            global_values.extend(
+                [
+                    _card_id(select.contextCard),
+                    _card_id(select.effect),
+                    _profile_hand_signal(me, self.profile),
+                    _profile_discard_signal(me, self.profile),
+                ]
+            )
         features[: len(global_values)] = global_values
         offset = BASE_FEATURES
         for player in (me, opp):
@@ -403,6 +414,10 @@ def _pokemon_id(pokemon) -> float:
     return 0.0 if pokemon is None else pokemon.id / 1300.0
 
 
+def _card_id(card) -> float:
+    return 0.0 if card is None else card.id / 1300.0
+
+
 def _pokemon_hp(pokemon) -> float:
     if pokemon is None or pokemon.maxHp <= 0:
         return 0.0
@@ -411,6 +426,25 @@ def _pokemon_hp(pokemon) -> float:
 
 def _pokemon_energy_count(pokemon) -> float:
     return 0.0 if pokemon is None else len(pokemon.energyCards) / 8.0
+
+
+def _profile_hand_signal(player, profile) -> float:
+    hand = player.hand or []
+    energy = sum(1 for card in hand if card and card.id in profile.energy_targets)
+    setup = sum(1 for card in hand if card and card.id in profile.setup_basics)
+    evolution = sum(1 for card in hand if card and card.id in profile.evolution_targets)
+    draw = sum(1 for card in hand if card and card.id in profile.draw_search_cards)
+    disruption = sum(1 for card in hand if card and card.id in profile.disruption_cards)
+    return min((energy + 2 * setup + 2 * evolution + draw + disruption) / 20.0, 1.0)
+
+
+def _profile_discard_signal(player, profile) -> float:
+    discard = player.discard or []
+    attackers = profile.main_attackers | profile.backup_attackers
+    energy = sum(1 for card in discard if card and card.id in profile.energy_targets)
+    recovery = sum(1 for card in discard if card and card.id in profile.recovery_cards)
+    discarded_attackers = sum(1 for card in discard if card and card.id in attackers)
+    return min((energy + recovery + 2 * discarded_attackers) / 20.0, 1.0)
 
 
 def _pokemon_features(pokemon, active_slot: bool) -> np.ndarray:

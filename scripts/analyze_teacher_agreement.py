@@ -28,13 +28,24 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=3000)
     parser.add_argument("--seed", type=int, default=91)
     parser.add_argument("--device", default="auto", help="Torch device: auto, cpu, cuda, or cuda:N.")
+    parser.add_argument(
+        "--effect-features",
+        action="store_true",
+        help="Use optional global prompt/effect feature slots. Must match the model's training setting.",
+    )
     args = parser.parse_args()
     args.device = resolve_torch_device(args.device)
     configure_torch_runtime(args.device)
     print(describe_torch_device(args.device), file=sys.stderr)
 
     model = MaskablePPO.load(args.model, device=args.device)
-    env = PTCGEnv(deck=args.deck, opponent=args.opponent, reward_shaping_scale=0.0, seed=args.seed)
+    env = PTCGEnv(
+        deck=args.deck,
+        opponent=args.opponent,
+        reward_shaping_scale=0.0,
+        effect_features=args.effect_features,
+        seed=args.seed,
+    )
     teacher = make_opponent(args.teacher)
 
     exact = 0

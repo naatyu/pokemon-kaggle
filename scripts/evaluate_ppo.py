@@ -25,6 +25,11 @@ def main() -> None:
     parser.add_argument("--device", default="auto", help="Torch device: auto, cpu, cuda, or cuda:N.")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--csv", action="store_true")
+    parser.add_argument(
+        "--effect-features",
+        action="store_true",
+        help="Use optional global prompt/effect feature slots. Must match the model's training setting.",
+    )
     args = parser.parse_args()
     args.device = resolve_torch_device(args.device)
     configure_torch_runtime(args.device)
@@ -33,7 +38,12 @@ def main() -> None:
     model = MaskablePPO.load(args.model, device=args.device)
     wins = losses = draws = truncated = 0
     for game in range(args.games):
-        env = PTCGEnv(deck=args.deck, opponent=args.opponent, seed=args.seed + game)
+        env = PTCGEnv(
+            deck=args.deck,
+            opponent=args.opponent,
+            effect_features=args.effect_features,
+            seed=args.seed + game,
+        )
         obs, _ = env.reset(seed=args.seed + game)
         done = False
         total_reward = 0.0
