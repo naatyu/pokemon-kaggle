@@ -46,11 +46,12 @@ This improves aggregate public-opponent wins from `64/280` for the previous
 best action-aware PPO to `81/280`, and local/random wins from `99/120` to
 `101/120`. It is still far from beating `public_metal_archaludon`.
 
-`models/best/ppo_action_embed_rank_bc_public_metal_broad_30k_best.zip` is the
+`models/best/ppo_action_embed_rank_bc30k_stratified_broad_20k_best.zip` is the
 best current public-Metal candidate. It is not the best aggregate checkpoint,
-but it raised the public-Metal 80-game result to `6/80`, compared with `2/80`
-or worse for most broad PPO checkpoints. Use it for focused public-Metal
-analysis, not as the default broad submission candidate.
+but it raised the public-Metal 80-game result to `9/80`, compared with `2/80`
+or worse for most broad PPO checkpoints and `6/80` for the previous specialist
+candidates. Use it for focused public-Metal analysis, not as the default broad
+submission candidate.
 
 Historical note: `models/best/ppo_action_broad_best.zip` was the previous best
 aggregate checkpoint before card/attack embeddings:
@@ -517,6 +518,38 @@ This reinforces the current diagnosis: PPO is improving rollout reward and
 teacher agreement, but it still overfits or drifts in ways that hurt broad
 matchup strength. The immediate path forward is larger and more diverse
 rank-aware imitation, plus better checkpoint selection, before longer PPO.
+
+`train_ppo.py` now supports `--eval-stratified`. When enabled, a comma-separated
+`--eval-opponent` list is evaluated one opponent at a time and checkpoints are
+saved by mean per-opponent win rate. This is slower than sampling from the pool,
+but it exposes individual matchup regressions during training.
+
+A second 20k PPO fine-tune from the same 30k rank-aware BC checkpoint used
+stratified checkpointing over 12 opponents. The best small stratified eval was
+`31/72`, mean win rate `0.431`, at steps 12288/16384. The final checkpoint
+regressed to `21/72`, so stratified best-checkpoint selection mattered.
+
+Larger deterministic checks for
+`models/best/ppo_action_embed_rank_bc30k_stratified_broad_20k_best.zip`:
+
+```text
+public_metal_archaludon: 9/80
+public_multiply_940: 4/20
+public_mega_lucario_v62: 1/20
+public_strong_start_v10: 1/20
+public_baseline_1084: 4/20
+public_crustle_v1: 2/20
+public_phantom_dragapult: 3/20
+public_froslass_sleep: 3/20
+public_kangaskhan_pressure: 9/20
+heuristic_hydrapple: 14/20
+heuristic_dragapult: 16/20
+random_abomasnow: 18/20
+```
+
+This is the best public-Metal result so far, but it still trades off too much
+against several public agents to replace `models/best/ppo_action_embed_broad_best.zip`
+as the broad default.
 
 ## Diagnosis
 

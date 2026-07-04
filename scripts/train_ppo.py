@@ -30,6 +30,15 @@ def parse_net_arch(value: str) -> list[int]:
     return layers
 
 
+def _parse_name_list(value: str) -> list[str]:
+    names = [name.strip() for name in value.split(",") if name.strip()]
+    return names or [value]
+
+
+def _metric_key(value: str) -> str:
+    return "".join(character if character.isalnum() else "_" for character in value)
+
+
 def make_env(
     deck: str,
     opponent: str,
@@ -181,16 +190,19 @@ class MaskedEvalCallback(BaseCallback):
         seed: int,
         deterministic: bool = True,
         effect_features: bool = False,
+        stratified: bool = False,
     ):
         super().__init__()
         self.deck = deck
         self.opponent = opponent
+        self.eval_opponents = _parse_name_list(opponent) if stratified else [opponent]
         self.games = games
         self.eval_freq = eval_freq
         self.save_path = save_path
         self.seed = seed
         self.deterministic = deterministic
         self.effect_features = effect_features
+        self.stratified = stratified
         self.best_win_rate = -1.0
         self.last_eval_timestep = -1
 
@@ -208,31 +220,52 @@ class MaskedEvalCallback(BaseCallback):
         return True
 
     def _run_eval(self) -> None:
-        wins, losses, draws, truncated = evaluate_model(
-            self.model,
-            deck=self.deck,
-            opponent=self.opponent,
-            games=self.games,
-            seed=self.seed + self.num_timesteps,
-            deterministic=self.deterministic,
-            effect_features=self.effect_features,
-        )
-        win_rate = wins / self.games if self.games else 0.0
-        self.logger.record("eval/win_rate", win_rate)
-        self.logger.record("eval/wins", wins)
-        self.logger.record("eval/losses", losses)
-        self.logger.record("eval/draws", draws)
-        self.logger.record("eval/truncated", truncated)
+        total_wins = total_losses = total_draws = total_truncated = 0
+        win_rates = []
+        for index, opponent in enumerate(self.eval_opponents):
+            wins, losses, draws, truncated = evaluate_model(
+                self.model,
+                deck=self.deck,
+                opponent=opponent,
+                games=self.games,
+                seed=self.seed + self.num_timesteps + index * 100_003,
+                deterministic=self.deterministic,
+                effect_features=self.effect_features,
+            )
+            win_rate = wins / self.games if self.games else 0.0
+            win_rates.append(win_rate)
+            total_wins += wins
+            total_losses += losses
+            total_draws += draws
+            total_truncated += truncated
+            if self.stratified:
+                key = _metric_key(opponent)
+                self.logger.record(f"eval/{key}_win_rate", win_rate)
+                print(
+                    f"eval_detail step={self.num_timesteps} opponent={opponent} "
+                    f"wins={wins}/{self.games} win_rate={win_rate:.3f}"
+                )
+
+        mean_win_rate = float(np.mean(win_rates)) if win_rates else 0.0
+        pooled_games = self.games * len(self.eval_opponents)
+        pooled_win_rate = total_wins / pooled_games if pooled_games else 0.0
+        self.logger.record("eval/win_rate", mean_win_rate)
+        self.logger.record("eval/pooled_win_rate", pooled_win_rate)
+        self.logger.record("eval/wins", total_wins)
+        self.logger.record("eval/losses", total_losses)
+        self.logger.record("eval/draws", total_draws)
+        self.logger.record("eval/truncated", total_truncated)
         self.last_eval_timestep = self.num_timesteps
         print(
             f"eval step={self.num_timesteps} opponent={self.opponent} "
-            f"wins={wins}/{self.games} win_rate={win_rate:.3f}"
+            f"wins={total_wins}/{pooled_games} mean_win_rate={mean_win_rate:.3f} "
+            f"pooled_win_rate={pooled_win_rate:.3f}"
         )
-        if self.save_path is not None and win_rate > self.best_win_rate:
-            self.best_win_rate = win_rate
+        if self.save_path is not None and mean_win_rate > self.best_win_rate:
+            self.best_win_rate = mean_win_rate
             self.save_path.parent.mkdir(parents=True, exist_ok=True)
             self.model.save(self.save_path)
-            print(f"new_best_eval={win_rate:.3f} saved={self.save_path}")
+            print(f"new_best_eval={mean_win_rate:.3f} saved={self.save_path}")
 
 
 def collect_bc_data(deck: str, opponent: str, teacher_name: str, samples: int, seed: int, effect_features: bool):
@@ -395,6 +428,11 @@ def main() -> None:
     parser.add_argument("--eval-opponent")
     parser.add_argument("--eval-games", type=int, default=20)
     parser.add_argument("--eval-freq", type=int, default=0)
+    parser.add_argument(
+        "--eval-stratified",
+        action="store_true",
+        help="Evaluate each comma-separated eval opponent separately and save by mean win rate.",
+    )
     parser.add_argument("--best-save-path", type=Path)
     args = parser.parse_args()
     args.device = resolve_torch_device(args.device)
@@ -439,6 +477,7 @@ def main() -> None:
                 save_path=args.best_save_path,
                 seed=args.seed + 20_000,
                 effect_features=args.effect_features,
+                stratified=args.eval_stratified,
             )
         )
     callback = CallbackList(callbacks) if len(callbacks) > 1 else callbacks[0] if callbacks else None

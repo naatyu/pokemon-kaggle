@@ -124,6 +124,7 @@ uv run python scripts/train_ppo.py \
   --eval-opponent "$POOL" \
   --eval-games 40 \
   --eval-freq 4096 \
+  --eval-stratified \
   --best-save-path models/best/ppo_action_embed_broad_best \
   --device cuda
 ```
@@ -134,6 +135,11 @@ neural network updates run on GPU, but game simulation, public-agent calls, and
 legal-action generation are still CPU work. In-training evaluation must use
 subprocess envs; do not combine `--eval-opponent` with `--start-method dummy`
 or a single env.
+
+Use `--eval-stratified` when `--eval-opponent` contains a comma-separated pool.
+It evaluates each named opponent separately and saves the best checkpoint by
+mean per-opponent win rate. This is slower than sampling the pool, but it makes
+regressions against individual public agents visible during training.
 
 Behavioral-cloning pretraining has the same split: teacher trajectory
 collection is CPU-bound, then cross-entropy training runs on `--device`.
@@ -170,7 +176,8 @@ analysis of checkpoints trained with those extra state signals.
 `--policy action_embed_rank` adds learnable positional embeddings and logit
 biases for the heuristic-sorted action slots. In a 5k public-Metal BC smoke it
 improved validation accuracy from `0.378` to `0.544`; at 30k samples it reached
-`0.620` validation accuracy and `6/80` against `public_metal_archaludon`. It is
+`0.620` validation accuracy. With stratified PPO checkpointing, the best
+public-Metal specialist reached `9/80` against `public_metal_archaludon`. It is
 the better architecture for imitation experiments, but
 `models/best/ppo_action_embed_broad_best.zip` remains the stronger aggregate
 checkpoint across the full public pool.
