@@ -135,11 +135,13 @@ class EmbeddedActionMaskablePolicy(MaskableActorCriticPolicy):
         hidden_dim: int = 256,
         card_embedding_dim: int = 32,
         attack_embedding_dim: int = 16,
+        use_rank_embedding: bool = False,
         **kwargs: Any,
     ):
         self.hidden_dim = hidden_dim
         self.card_embedding_dim = card_embedding_dim
         self.attack_embedding_dim = attack_embedding_dim
+        self.use_rank_embedding = use_rank_embedding
         super().__init__(
             observation_space,
             action_space,
@@ -151,6 +153,9 @@ class EmbeddedActionMaskablePolicy(MaskableActorCriticPolicy):
     def _build(self, lr_schedule: Schedule) -> None:
         self.card_embedding = nn.Embedding(MAX_CARD_ID + 1, self.card_embedding_dim, padding_idx=0)
         self.attack_embedding = nn.Embedding(MAX_ATTACK_ID + 1, self.attack_embedding_dim, padding_idx=0)
+        if self.use_rank_embedding:
+            self.rank_embedding = nn.Embedding(MAX_OPTIONS, self.hidden_dim)
+            self.rank_logit_bias = nn.Embedding(MAX_OPTIONS, 1)
         global_input_dim = GLOBAL_FEATURES + self.card_embedding_dim * 5
         option_input_dim = OPTION_FEATURES + self.card_embedding_dim + self.attack_embedding_dim
         self.global_encoder = _mlp(global_input_dim, self.hidden_dim, self.hidden_dim)
@@ -180,6 +185,9 @@ class EmbeddedActionMaskablePolicy(MaskableActorCriticPolicy):
             }
             for module, gain in module_gains.items():
                 module.apply(partial(self.init_weights, gain=gain))
+        if self.use_rank_embedding:
+            nn.init.zeros_(self.rank_embedding.weight)
+            nn.init.zeros_(self.rank_logit_bias.weight)
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
 
     def forward(
@@ -262,11 +270,42 @@ class EmbeddedActionMaskablePolicy(MaskableActorCriticPolicy):
         option_latent = self.option_encoder(option_input.reshape(-1, option_input.shape[-1])).reshape(
             batch_size, MAX_OPTIONS, self.hidden_dim
         )
+        if self.use_rank_embedding:
+            rank_indices = th.arange(MAX_OPTIONS, device=obs.device)
+            option_latent = option_latent + self.rank_embedding(rank_indices).unsqueeze(0)
         expanded_global = global_latent.unsqueeze(1).expand(-1, MAX_OPTIONS, -1)
         action_logits = self.action_scorer(th.cat([expanded_global, option_latent], dim=-1)).squeeze(-1)
+        if self.use_rank_embedding:
+            rank_indices = th.arange(MAX_OPTIONS, device=obs.device)
+            action_logits = action_logits + self.rank_logit_bias(rank_indices).squeeze(-1).unsqueeze(0)
         noop_logit = self.noop_scorer(global_latent)
         values = self.value_net(global_latent)
         return th.cat([action_logits, noop_logit], dim=1), values
+
+
+class RankedEmbeddedActionMaskablePolicy(EmbeddedActionMaskablePolicy):
+    """Embedded action policy with learnable positional features for sorted action slots."""
+
+    def __init__(
+        self,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        lr_schedule: Schedule,
+        hidden_dim: int = 256,
+        card_embedding_dim: int = 32,
+        attack_embedding_dim: int = 16,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            observation_space,
+            action_space,
+            lr_schedule,
+            hidden_dim=hidden_dim,
+            card_embedding_dim=card_embedding_dim,
+            attack_embedding_dim=attack_embedding_dim,
+            use_rank_embedding=True,
+            **kwargs,
+        )
 
 
 def _mlp(input_dim: int, hidden_dim: int, output_dim: int) -> nn.Sequential:

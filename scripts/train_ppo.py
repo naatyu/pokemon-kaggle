@@ -19,7 +19,7 @@ from rl.ptcg_env import PTCGEnv
 from rl.opponents import make_opponent
 from rl.ptcg_env import NOOP_ACTION
 from rl.device import configure_torch_runtime, describe_torch_device, resolve_torch_device
-from rl.action_policy import ActionMaskablePolicy, EmbeddedActionMaskablePolicy
+from rl.action_policy import ActionMaskablePolicy, EmbeddedActionMaskablePolicy, RankedEmbeddedActionMaskablePolicy
 from cg.api import to_observation_class
 
 
@@ -86,8 +86,12 @@ def build_model(args: argparse.Namespace, env: PTCGEnv | VecEnv) -> MaskablePPO:
     if args.policy == "action":
         policy = ActionMaskablePolicy
         policy_kwargs = {"hidden_dim": args.policy_hidden_dim}
-    elif args.policy == "action_embed":
-        policy = EmbeddedActionMaskablePolicy
+    elif args.policy in {"action_embed", "action_embed_rank"}:
+        policy = (
+            RankedEmbeddedActionMaskablePolicy
+            if args.policy == "action_embed_rank"
+            else EmbeddedActionMaskablePolicy
+        )
         policy_kwargs = {
             "hidden_dim": args.policy_hidden_dim,
             "card_embedding_dim": args.card_embedding_dim,
@@ -257,6 +261,28 @@ def collect_bc_data(deck: str, opponent: str, teacher_name: str, samples: int, s
     return np.asarray(observations, dtype=np.float32), np.asarray(actions, dtype=np.int64), np.asarray(masks, dtype=bool)
 
 
+def load_or_collect_bc_data(args: argparse.Namespace):
+    if args.bc_reuse_dataset:
+        if args.bc_dataset_path is None:
+            raise ValueError("--bc-reuse-dataset requires --bc-dataset-path.")
+        data = np.load(args.bc_dataset_path)
+        return data["observations"], data["actions"], data["masks"]
+
+    observations, actions, masks = collect_bc_data(
+        args.deck,
+        args.opponent,
+        args.bc_teacher,
+        args.bc_samples,
+        args.seed + 10_000,
+        args.effect_features,
+    )
+    if args.bc_dataset_path is not None:
+        args.bc_dataset_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(args.bc_dataset_path, observations=observations, actions=actions, masks=masks)
+        print(f"bc_dataset_saved={args.bc_dataset_path}", file=sys.stderr)
+    return observations, actions, masks
+
+
 def teacher_action_to_rank(env: PTCGEnv, teacher) -> int | None:
     if env.obs_dict is None:
         return None
@@ -339,7 +365,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--ent-coef", type=float, default=0.02)
-    parser.add_argument("--policy", choices=["mlp", "action", "action_embed"], default="mlp")
+    parser.add_argument("--policy", choices=["mlp", "action", "action_embed", "action_embed_rank"], default="mlp")
     parser.add_argument("--policy-hidden-dim", type=int, default=256)
     parser.add_argument("--card-embedding-dim", type=int, default=32)
     parser.add_argument("--attack-embedding-dim", type=int, default=16)
@@ -356,6 +382,16 @@ def main() -> None:
     parser.add_argument("--bc-coef", type=float, default=0.0)
     parser.add_argument("--bc-batch-size", type=int, default=512)
     parser.add_argument("--bc-epochs-per-rollout", type=int, default=1)
+    parser.add_argument(
+        "--bc-dataset-path",
+        type=Path,
+        help="Optional .npz path for saving/loading BC regularization data.",
+    )
+    parser.add_argument(
+        "--bc-reuse-dataset",
+        action="store_true",
+        help="Load --bc-dataset-path instead of collecting BC data.",
+    )
     parser.add_argument("--eval-opponent")
     parser.add_argument("--eval-games", type=int, default=20)
     parser.add_argument("--eval-freq", type=int, default=0)
@@ -382,14 +418,7 @@ def main() -> None:
     model = build_model(args, env)
     callbacks = []
     if args.bc_teacher and args.bc_samples > 0 and args.bc_coef > 0:
-        observations, actions, masks = collect_bc_data(
-            args.deck,
-            args.opponent,
-            args.bc_teacher,
-            args.bc_samples,
-            args.seed + 10_000,
-            args.effect_features,
-        )
+        observations, actions, masks = load_or_collect_bc_data(args)
         callbacks.append(
             BCRegularizationCallback(
                 observations,

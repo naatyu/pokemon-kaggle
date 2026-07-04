@@ -16,7 +16,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from rl.opponents import make_opponent  # noqa: E402
 from rl.device import configure_torch_runtime, describe_torch_device, resolve_torch_device  # noqa: E402
 from rl.ptcg_env import MAX_OPTIONS, NOOP_ACTION, OBS_SIZE, PTCGEnv  # noqa: E402
-from rl.action_policy import ActionMaskablePolicy, EmbeddedActionMaskablePolicy  # noqa: E402
+from rl.action_policy import (  # noqa: E402
+    ActionMaskablePolicy,
+    EmbeddedActionMaskablePolicy,
+    RankedEmbeddedActionMaskablePolicy,
+)
 from scripts.train_ppo import parse_net_arch  # noqa: E402
 from cg.api import to_observation_class  # noqa: E402
 
@@ -44,7 +48,7 @@ def main() -> None:
     parser.add_argument("--load-path", type=Path)
     parser.add_argument("--seed", type=int, default=31)
     parser.add_argument("--device", default="auto", help="Torch device: auto, cpu, cuda, or cuda:N.")
-    parser.add_argument("--policy", choices=["mlp", "action", "action_embed"], default="mlp")
+    parser.add_argument("--policy", choices=["mlp", "action", "action_embed", "action_embed_rank"], default="mlp")
     parser.add_argument("--policy-hidden-dim", type=int, default=256)
     parser.add_argument("--card-embedding-dim", type=int, default=32)
     parser.add_argument("--attack-embedding-dim", type=int, default=16)
@@ -105,8 +109,12 @@ def _build_model(args: argparse.Namespace, env: PTCGEnv) -> MaskablePPO:
     if args.policy == "action":
         policy = ActionMaskablePolicy
         policy_kwargs = {"hidden_dim": args.policy_hidden_dim}
-    elif args.policy == "action_embed":
-        policy = EmbeddedActionMaskablePolicy
+    elif args.policy in {"action_embed", "action_embed_rank"}:
+        policy = (
+            RankedEmbeddedActionMaskablePolicy
+            if args.policy == "action_embed_rank"
+            else EmbeddedActionMaskablePolicy
+        )
         policy_kwargs = {
             "hidden_dim": args.policy_hidden_dim,
             "card_embedding_dim": args.card_embedding_dim,

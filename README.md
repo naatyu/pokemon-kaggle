@@ -120,6 +120,7 @@ uv run python scripts/train_ppo.py \
   --bc-teacher public_metal_archaludon \
   --bc-samples 6000 \
   --bc-coef 0.40 \
+  --bc-dataset-path data/bc_public_metal_broad_6k.npz \
   --eval-opponent "$POOL" \
   --eval-games 40 \
   --eval-freq 4096 \
@@ -165,6 +166,17 @@ each ranked action choice with shared action-slot weights, and also embeds card
 IDs and attack IDs categorically instead of treating them only as continuous
 numbers. Use `--effect-features` consistently for training, evaluation, and
 analysis of checkpoints trained with those extra state signals.
+
+`--policy action_embed_rank` adds learnable positional embeddings and logit
+biases for the heuristic-sorted action slots. In a 5k public-Metal BC smoke it
+improved validation accuracy from `0.378` to `0.544`, but the corresponding
+20k PPO experiments did not replace `models/best/ppo_action_embed_broad_best.zip`
+as the best aggregate checkpoint. Treat it as the next architecture to test
+with larger BC datasets, not as the current submission default.
+
+`train_ppo.py` can reuse BC regularization data with `--bc-dataset-path` and
+`--bc-reuse-dataset`. This avoids repeatedly simulating the same teacher states
+when running short PPO experiments.
 
 `--tempo-reward-scale` adds optional dense reward for board setup, ready
 attackers, useful energy placement, and prize tempo. Keep it at `0` for broad

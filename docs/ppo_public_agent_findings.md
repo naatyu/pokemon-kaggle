@@ -364,6 +364,86 @@ PPO reduced teacher agreement slightly, from `0.619` to `0.605` on the same
 embedded policy is a better starting representation, while PPO is still
 finding only shallow improvements against the strongest public agents.
 
+## Rank-Aware Embedded Policy
+
+`RankedEmbeddedActionMaskablePolicy` keeps the same observation shape as
+`EmbeddedActionMaskablePolicy`, but adds learnable positional embeddings and
+logit biases for the heuristic-sorted action slots. This preserves old
+checkpoints and makes the sorted action rank available to the shared action
+scorer without changing `PTCGEnv`.
+
+On the same cached 5k public-Metal teacher dataset from the expanded public
+opponent pool:
+
+```text
+models/ppo_action_embed_bc_public_metal_broad_5k.zip:
+  validation_accuracy=0.378
+  public-Metal teacher agreement, 1k states: exact=0.429 near_rank=0.647
+
+models/ppo_action_embed_rank_bc_public_metal_broad_5k.zip:
+  validation_accuracy=0.544
+  public-Metal teacher agreement, 1k states: exact=0.536 near_rank=0.714
+```
+
+So the rank-aware policy clearly improves small-data imitation. It does not yet
+solve gameplay by itself:
+
+```text
+models/ppo_action_embed_rank_bc_public_metal_broad_5k.zip:
+public_metal_archaludon: 0/20
+public_multiply_940: 2/20
+public_mega_lucario_v62: 2/20
+public_strong_start_v10: 0/20
+public_baseline_1084: 1/20
+heuristic_hydrapple: 8/20
+heuristic_dragapult: 11/20
+random_abomasnow: 18/20
+```
+
+Broad PPO fine-tuning for 20k timesteps from this 5k rank-aware BC checkpoint
+improved the mixed in-training eval from `2/16` at step 0 to `7/16` at step
+20480. Per-opponent deterministic checks for
+`models/best/ppo_action_embed_rank_broad_20k_best.zip`:
+
+```text
+public_metal_archaludon: 0/20
+public_multiply_940: 3/20
+public_mega_lucario_v62: 1/20
+public_strong_start_v10: 7/20
+public_baseline_1084: 3/20
+public_archaludon_75wr: 1/20
+public_alakazam_best5: 3/20
+public_kiyota_mega_lucario: 7/20
+public_kiyota_dragapult: 0/20
+public_kiyota_iono: 2/20
+heuristic_hydrapple: 13/20
+heuristic_dragapult: 13/20
+random_abomasnow: 15/20
+```
+
+Compared with `models/best/ppo_action_embed_broad_best.zip` on the newly
+imported public agents:
+
+```text
+public_strong_start_v10: 4/20
+public_baseline_1084: 2/20
+public_archaludon_75wr: 2/20
+public_alakazam_best5: 5/20
+public_kiyota_mega_lucario: 6/20
+public_kiyota_dragapult: 2/20
+public_kiyota_iono: 1/20
+```
+
+The rank-aware broad run helps `public_strong_start_v10`,
+`public_baseline_1084`, `public_kiyota_mega_lucario`, and
+`public_kiyota_iono`, but regresses other matchups. It is not a new aggregate
+best.
+
+A focused public-Metal tempo run from the same rank-aware BC checkpoint reached
+only `2/80` for `models/best/ppo_action_embed_rank_metal_tempo_20k_best.zip`,
+below the previous `6/80` from
+`models/best/ppo_action_embed_metal_tempo_best.zip`.
+
 ## Diagnosis
 
 `scripts/analyze_teacher_agreement.py` measures whether a checkpoint picks the
@@ -418,8 +498,8 @@ useful corrective signal.
 More raw PPO timesteps are unlikely to be enough by themselves. The current
 highest-value changes are:
 
-1. Stronger embedded BC before PPO: larger datasets, validation accuracy, and
-   possibly sequence-level imitation for multi-select states.
+1. Stronger embedded/rank-aware BC before PPO: larger datasets, validation
+   accuracy, and possibly sequence-level imitation for multi-select states.
 2. Per-opponent curriculum with best-checkpoint selection, not final-checkpoint
    selection.
 3. Public-Metal-specific training with a better reward. Focused public-Metal PPO improved
