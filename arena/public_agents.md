@@ -1,41 +1,59 @@
 # Public agent fetch notes
 
-Last attempted: 2026-07-03
+Last attempted: 2026-07-04
 
-Kaggle submissions themselves are private. Public notebooks can describe or
-generate agents, but anonymous raw notebook downloads were not accessible from
-this environment. The rendered Kaggle HTML did not include notebook source, and
-`/download` URLs returned 404 without Kaggle API/session access.
+Kaggle submissions themselves are private, but public notebooks can be pulled
+through the authenticated Kaggle CLI and converted into local arena opponents
+when they expose enough submission source.
 
-Useful public notebook candidates to fetch manually from Kaggle:
-
-- Beating the Day-1 #1 Crustle Bot:
-  https://www.kaggle.com/code/dashimaki360/beating-the-day-1-1-crustle-bot
-- Dragapult v3 Tempo PTCG AI Battle Agent:
-  https://www.kaggle.com/code/zoli800/dragapult-v3-tempo-ptcg-ai-battle-agent
-- A Sample Archaludon:
-  https://www.kaggle.com/code/masamikobayashi/a-sample-archaludon-75-wr-vs-my-1300-starmie
-- Pokemon TCG Lucario & Alakazam:
-  https://www.kaggle.com/code/pilkwang/pokemon-tcg-lucario-alakazam
-- PTCGAI Optimize Baseline:
-  https://www.kaggle.com/code/suneetsaini/ptcgai-optimize-baseline
-- PTCG Crustle V1 Submit:
-  https://www.kaggle.com/code/pixiux/ptcg-crustle-v1-submit
-
-Manual workflow:
-
-1. Open the notebook on Kaggle.
-2. Download its generated `submission.tar.gz` / `*.tgz`, or copy the generated
-   `main.py` and `deck.csv`.
-3. Extract/copy into `arena/agents/<name>/`.
-4. Run:
+The CLI is available through `uv run kaggle` in this environment. Useful
+commands:
 
 ```bash
-python3 scripts/run_arena.py --agents <name> hydrapple_heuristic --games 10
+uv run kaggle kernels list \
+  --competition pokemon-tcg-ai-battle \
+  --page-size 50 \
+  --sort-by scoreDescending
+
+uv run kaggle kernels pull romanrozen/strong-start-baseline-agent-v10-lb-950 \
+  -p arena/public_sources/strong_start_v10 \
+  -m
 ```
 
-You can import a downloaded public submission archive with:
+For notebooks with a `%%writefile main.py` cell:
 
 ```bash
-python3 scripts/import_arena_agent.py --name <agent_name> --archive path/to/submission.tar.gz
+uv run python scripts/extract_public_notebook_agent.py \
+  --name public_strong_start_v10 \
+  --notebook arena/public_sources/strong_start_v10/strong-start-baseline-agent-v10-lb-950.ipynb \
+  --replace
 ```
+
+Some Kiyota notebooks reference external deck datasets. Download those beside
+the notebook before extraction:
+
+```bash
+uv run kaggle datasets download \
+  -d kiyotah/mega-lucario-ex-deck \
+  -p arena/public_sources/strong_start_v10/deck_dataset \
+  --unzip
+```
+
+For a downloaded public submission archive:
+
+```bash
+uv run python scripts/import_arena_agent.py \
+  --name <agent_name> \
+  --archive path/to/submission.tar.gz
+```
+
+Always smoke-test after import:
+
+```bash
+uv run python scripts/run_arena.py \
+  --agents <agent_name> hydrapple_heuristic \
+  --games 5
+```
+
+See [opponent_pool.md](opponent_pool.md) for the current working public arena
+agents and the PPO opponent mix.

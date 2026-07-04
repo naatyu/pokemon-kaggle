@@ -30,6 +30,10 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--validation-split", type=float, default=0.1)
+    parser.add_argument("--patience", type=int, default=0, help="Stop after N epochs without validation improvement. 0 disables early stopping.")
+    parser.add_argument("--dataset-path", type=Path, help="Optional .npz path for loading/saving collected BC data.")
+    parser.add_argument("--reuse-dataset", action="store_true", help="Load --dataset-path instead of collecting new teacher data.")
     parser.add_argument(
         "--collection-workers",
         type=int,
@@ -56,9 +60,31 @@ def main() -> None:
     print(describe_torch_device(args.device), file=sys.stderr)
 
     env = PTCGEnv(deck=args.deck, opponent=args.opponent, effect_features=args.effect_features, seed=args.seed)
-    teacher = make_opponent(args.teacher)
     model = _build_model(args, env)
     env.close()
+    observations, actions, masks = load_or_collect_teacher_data(args)
+    train_bc(
+        model,
+        observations,
+        actions,
+        masks,
+        args.epochs,
+        args.batch_size,
+        validation_split=args.validation_split,
+        patience=args.patience,
+    )
+    args.save_path.parent.mkdir(parents=True, exist_ok=True)
+    model.save(args.save_path)
+    print(args.save_path)
+
+
+def load_or_collect_teacher_data(args: argparse.Namespace):
+    if args.reuse_dataset:
+        if args.dataset_path is None:
+            raise ValueError("--reuse-dataset requires --dataset-path.")
+        data = np.load(args.dataset_path)
+        return data["observations"], data["actions"], data["masks"]
+
     observations, actions, masks = collect_teacher_data(
         args.deck,
         args.opponent,
@@ -68,11 +94,11 @@ def main() -> None:
         args.collection_workers,
         args.effect_features,
     )
-    train_bc(model, observations, actions, masks, args.epochs, args.batch_size)
-    args.save_path.parent.mkdir(parents=True, exist_ok=True)
-    model.save(args.save_path)
-    env.close()
-    print(args.save_path)
+    if args.dataset_path is not None:
+        args.dataset_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(args.dataset_path, observations=observations, actions=actions, masks=masks)
+        print(f"dataset_saved={args.dataset_path}", file=sys.stderr)
+    return observations, actions, masks
 
 
 def _build_model(args: argparse.Namespace, env: PTCGEnv) -> MaskablePPO:
@@ -231,12 +257,25 @@ def teacher_action_to_rank(env: PTCGEnv, teacher) -> int | None:
         return None
 
 
-def train_bc(model: MaskablePPO, observations: np.ndarray, actions: np.ndarray, masks: np.ndarray, epochs: int, batch_size: int):
+def train_bc(
+    model: MaskablePPO,
+    observations: np.ndarray,
+    actions: np.ndarray,
+    masks: np.ndarray,
+    epochs: int,
+    batch_size: int,
+    validation_split: float,
+    patience: int,
+):
     device = model.device
     rng = np.random.default_rng(123)
+    train_indices, validation_indices = split_train_validation(len(actions), validation_split, rng)
     model.policy.set_training_mode(True)
+    best_validation_loss = float("inf")
+    best_parameters = None
+    epochs_without_improvement = 0
     for epoch in range(epochs):
-        indices = rng.permutation(len(actions))
+        indices = rng.permutation(train_indices)
         losses = []
         accuracies = []
         for start in range(0, len(indices), batch_size):
@@ -256,7 +295,68 @@ def train_bc(model: MaskablePPO, observations: np.ndarray, actions: np.ndarray, 
                 predicted, _ = model.predict(observations[batch_indices], action_masks=masks[batch_indices], deterministic=True)
                 accuracies.append(float((predicted == actions[batch_indices]).mean()))
             losses.append(float(loss.detach().cpu()))
-        print(f"epoch={epoch + 1} loss={np.mean(losses):.4f} accuracy={np.mean(accuracies):.3f}")
+        validation_loss, validation_accuracy = evaluate_bc_loss(
+            model,
+            observations,
+            actions,
+            masks,
+            validation_indices,
+            batch_size,
+        )
+        train_loss = float(np.mean(losses))
+        train_accuracy = float(np.mean(accuracies))
+        print(
+            f"epoch={epoch + 1} train_loss={train_loss:.4f} train_accuracy={train_accuracy:.3f} "
+            f"validation_loss={validation_loss:.4f} validation_accuracy={validation_accuracy:.3f}"
+        )
+        if validation_loss < best_validation_loss:
+            best_validation_loss = validation_loss
+            best_parameters = {name: tensor.detach().cpu().clone() for name, tensor in model.policy.state_dict().items()}
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+            if patience > 0 and epochs_without_improvement >= patience:
+                print(f"early_stop epoch={epoch + 1} best_validation_loss={best_validation_loss:.4f}")
+                break
+    if best_parameters is not None:
+        model.policy.load_state_dict(best_parameters)
+        print(f"restored_best_validation_loss={best_validation_loss:.4f}")
+
+
+def split_train_validation(total: int, validation_split: float, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    indices = rng.permutation(total)
+    validation_count = int(total * validation_split)
+    if validation_count <= 0:
+        validation_count = min(max(1, total // 10), total)
+    if validation_count >= total:
+        validation_count = max(1, total - 1)
+    return indices[validation_count:], indices[:validation_count]
+
+
+def evaluate_bc_loss(
+    model: MaskablePPO,
+    observations: np.ndarray,
+    actions: np.ndarray,
+    masks: np.ndarray,
+    indices: np.ndarray,
+    batch_size: int,
+) -> tuple[float, float]:
+    device = model.device
+    losses = []
+    accuracies = []
+    model.policy.set_training_mode(False)
+    with torch.no_grad():
+        for start in range(0, len(indices), batch_size):
+            batch_indices = indices[start : start + batch_size]
+            obs_tensor = torch.as_tensor(observations[batch_indices], device=device)
+            action_tensor = torch.as_tensor(actions[batch_indices], device=device)
+            mask_tensor = torch.as_tensor(masks[batch_indices], device=device)
+            _, log_prob, _ = model.policy.evaluate_actions(obs_tensor, action_tensor, action_masks=mask_tensor)
+            losses.append(float((-log_prob.mean()).detach().cpu()))
+            predicted, _ = model.predict(observations[batch_indices], action_masks=masks[batch_indices], deterministic=True)
+            accuracies.append(float((predicted == actions[batch_indices]).mean()))
+    model.policy.set_training_mode(True)
+    return float(np.mean(losses)), float(np.mean(accuracies))
 
 
 if __name__ == "__main__":

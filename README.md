@@ -98,7 +98,7 @@ stable than raw simulator option indexes.
 Fast mixed-opponent training with best-checkpoint selection:
 
 ```bash
-POOL='public_metal_archaludon,public_multiply_940,public_mega_lucario_v62,public_crustle_v1,public_phantom_dragapult,public_froslass_sleep,public_kangaskhan_pressure,heuristic_hydrapple,heuristic_dragapult,random_abomasnow'
+POOL='public_metal_archaludon,public_multiply_940,public_mega_lucario_v62,public_strong_start_v10,public_baseline_1084,public_archaludon_75wr,public_alakazam_best5,public_crustle_v1,public_phantom_dragapult,public_froslass_sleep,public_kangaskhan_pressure,public_kiyota_mega_lucario,public_kiyota_dragapult,public_kiyota_iono,heuristic_hydrapple,heuristic_dragapult,random_abomasnow'
 uv run python scripts/train_ppo.py \
   --deck metal_archaludon \
   --opponent "$POOL" \
@@ -143,10 +143,13 @@ workers on a 32 GB machine and increase only after watching memory use.
 uv run python scripts/pretrain_ppo_bc.py \
   --deck metal_archaludon \
   --teacher public_metal_archaludon \
-  --opponent public_metal_archaludon,public_multiply_940,public_mega_lucario_v62 \
+  --opponent "$POOL" \
   --samples 30000 \
-  --epochs 8 \
+  --epochs 12 \
   --batch-size 1024 \
+  --validation-split 0.1 \
+  --patience 3 \
+  --dataset-path data/bc_public_metal_broad_30k.npz \
   --policy action_embed \
   --policy-hidden-dim 256 \
   --card-embedding-dim 32 \

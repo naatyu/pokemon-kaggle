@@ -27,19 +27,20 @@ def main() -> None:
             raise SystemExit(f"{target} already exists. Use --replace to overwrite.")
         shutil.rmtree(target)
     target.mkdir(parents=True)
+    shutil.copytree(SAMPLE_CG, target / "cg", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
     cells = json.loads(args.notebook.read_text())["cells"]
     main_source = _extract_main_py(cells)
     (target / "main.py").write_text(main_source, encoding="utf-8")
 
     _extract_writefile_deck(cells, target)
+    _copy_nearby_deck(args.notebook, target)
     _build_deck_csv(cells, target)
     if not (target / "deck.csv").exists():
         _deck_from_main(target)
     if not (target / "deck.csv").exists():
         raise RuntimeError(f"Could not produce deck.csv for {args.notebook}")
 
-    shutil.copytree(SAMPLE_CG, target / "cg", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     _smoke_import(target)
     print(target)
 
@@ -60,6 +61,14 @@ def _extract_writefile_deck(cells: list[dict], target: Path) -> None:
             lines = source.splitlines()
             (target / "deck.csv").write_text("\n".join(lines[1:]).strip() + "\n", encoding="utf-8")
             return
+
+
+def _copy_nearby_deck(notebook: Path, target: Path) -> None:
+    if (target / "deck.csv").exists():
+        return
+    candidates = sorted(notebook.parent.rglob("deck.csv"))
+    if len(candidates) == 1:
+        shutil.copy2(candidates[0], target / "deck.csv")
 
 
 def _build_deck_csv(cells: list[dict], target: Path) -> None:

@@ -3,6 +3,7 @@ __pycache__/
 *.py[oc]
 build/
 logs/
+data/
 arena/agents/
 arena/results/
 arena/public_sources/
