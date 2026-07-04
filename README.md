@@ -169,10 +169,11 @@ analysis of checkpoints trained with those extra state signals.
 
 `--policy action_embed_rank` adds learnable positional embeddings and logit
 biases for the heuristic-sorted action slots. In a 5k public-Metal BC smoke it
-improved validation accuracy from `0.378` to `0.544`, but the corresponding
-20k PPO experiments did not replace `models/best/ppo_action_embed_broad_best.zip`
-as the best aggregate checkpoint. Treat it as the next architecture to test
-with larger BC datasets, not as the current submission default.
+improved validation accuracy from `0.378` to `0.544`; at 30k samples it reached
+`0.620` validation accuracy and `6/80` against `public_metal_archaludon`. It is
+the better architecture for imitation experiments, but
+`models/best/ppo_action_embed_broad_best.zip` remains the stronger aggregate
+checkpoint across the full public pool.
 
 `train_ppo.py` can reuse BC regularization data with `--bc-dataset-path` and
 `--bc-reuse-dataset`. This avoids repeatedly simulating the same teacher states

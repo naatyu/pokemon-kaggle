@@ -46,6 +46,12 @@ This improves aggregate public-opponent wins from `64/280` for the previous
 best action-aware PPO to `81/280`, and local/random wins from `99/120` to
 `101/120`. It is still far from beating `public_metal_archaludon`.
 
+`models/best/ppo_action_embed_rank_bc_public_metal_broad_30k_best.zip` is the
+best current public-Metal candidate. It is not the best aggregate checkpoint,
+but it raised the public-Metal 80-game result to `6/80`, compared with `2/80`
+or worse for most broad PPO checkpoints. Use it for focused public-Metal
+analysis, not as the default broad submission candidate.
+
 Historical note: `models/best/ppo_action_broad_best.zip` was the previous best
 aggregate checkpoint before card/attack embeddings:
 
@@ -444,6 +450,74 @@ only `2/80` for `models/best/ppo_action_embed_rank_metal_tempo_20k_best.zip`,
 below the previous `6/80` from
 `models/best/ppo_action_embed_metal_tempo_best.zip`.
 
+Scaling rank-aware BC to 30k samples was much more useful than the 5k smoke.
+`models/ppo_action_embed_rank_bc_public_metal_broad_30k.zip` trained from a
+cached 30k dataset with validation and early stopping:
+
+```text
+epoch=12 train_accuracy=0.621 validation_accuracy=0.620
+public-Metal teacher agreement, 2k states: exact=0.618 near_rank=0.759
+```
+
+Its 20-game deterministic sweep:
+
+```text
+public_metal_archaludon: 5/20
+public_multiply_940: 2/20
+public_mega_lucario_v62: 5/20
+public_strong_start_v10: 6/20
+public_baseline_1084: 7/20
+public_archaludon_75wr: 3/20
+public_alakazam_best5: 3/20
+public_kiyota_mega_lucario: 3/20
+public_kiyota_dragapult: 2/20
+public_kiyota_iono: 3/20
+public_crustle_v1: 4/20
+public_phantom_dragapult: 4/20
+public_froslass_sleep: 6/20
+public_kangaskhan_pressure: 12/20
+heuristic_hydrapple: 13/20
+heuristic_dragapult: 15/20
+random_abomasnow: 17/20
+```
+
+Higher-sample checks:
+
+```text
+public_metal_archaludon: 6/80
+public_baseline_1084: 10/80
+```
+
+The public-Metal result is a real improvement over the broad aggregate PPO, but
+the `public_baseline_1084` 20-game result was noisy; over 80 games it is worse
+than `models/best/ppo_action_embed_broad_best.zip` at `24/80`.
+
+A broad 20k PPO fine-tune from this 30k rank-aware BC checkpoint improved the
+small mixed in-training eval from `9/24` at step 0 to `12/24` at step 20480 and
+teacher agreement to exact `0.635`, but it did not become the best player:
+
+```text
+models/best/ppo_action_embed_rank_bc30k_broad_20k_best.zip:
+public_metal_archaludon: 5/80
+public_multiply_940: 4/20
+public_mega_lucario_v62: 2/20
+public_strong_start_v10: 5/20
+public_baseline_1084: 0/20
+public_archaludon_75wr: 0/20
+public_alakazam_best5: 1/20
+public_kiyota_mega_lucario: 5/20
+public_kiyota_dragapult: 5/20
+public_kiyota_iono: 3/20
+heuristic_hydrapple: 16/20
+heuristic_dragapult: 8/20
+random_abomasnow: 16/20
+```
+
+This reinforces the current diagnosis: PPO is improving rollout reward and
+teacher agreement, but it still overfits or drifts in ways that hurt broad
+matchup strength. The immediate path forward is larger and more diverse
+rank-aware imitation, plus better checkpoint selection, before longer PPO.
+
 ## Diagnosis
 
 `scripts/analyze_teacher_agreement.py` measures whether a checkpoint picks the
@@ -498,8 +572,9 @@ useful corrective signal.
 More raw PPO timesteps are unlikely to be enough by themselves. The current
 highest-value changes are:
 
-1. Stronger embedded/rank-aware BC before PPO: larger datasets, validation
-   accuracy, and possibly sequence-level imitation for multi-select states.
+1. Stronger embedded/rank-aware BC before PPO: larger datasets help materially,
+   and the 30k rank-aware clone is the best public-Metal candidate so far.
+   Next test should be 60k-100k cached BC before longer PPO.
 2. Per-opponent curriculum with best-checkpoint selection, not final-checkpoint
    selection.
 3. Public-Metal-specific training with a better reward. Focused public-Metal PPO improved
